@@ -1,0 +1,19 @@
+{
+  "name": "ORGROOM — Campus Room Management",
+  "short_name": "ORGROOM",
+  "description": "Campus room reservation and facility management platform.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1118",
+  "theme_color": "#0b1118",
+  "icons": [
+    {
+      "src": "/icons/orgroom.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

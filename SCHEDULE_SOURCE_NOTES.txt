@@ -1,0 +1,13 @@
+ORGROOM REAL SCHEDULE SOURCE
+============================
+Source file: FL_1st-Sem-AY-2026-2027-FINAL.xlsx
+Primary schedule sheets used:
+- CLASSROOMS FINALIZATION
+- Computer Laboratory
+
+Extracted facilities: 29
+Extracted room-schedule entries: 670
+
+The old database's unrelated facility catalog and raw schedule-import/class/faculty tables were not carried into the OrgRoom database. Users, email verification, reservations, and recurring room-schedule infrastructure remain.
+
+No room capacities were invented because the supplied workbook does not provide them.
