@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const API = '';
+const API = import.meta.env.VITE_API_URL || '';
 const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const emptyForm = {
   orgName:'',
