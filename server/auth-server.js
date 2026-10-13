@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import nodemailer from 'nodemailer';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbQuery, dbTransaction, ensureDatabase, pool } from './db.js';
+
+
 
 const app = express();
 const configuredOrigins = String(process.env.CLIENT_ORIGIN || '').split(',').map(x=>x.trim()).filter(Boolean);
@@ -20,7 +21,7 @@ app.use(cors({ origin:(origin,callback)=>{
 }, credentials:false }));
 app.use(express.json({ limit: '50kb' }));
 
-const PORT = Number(process.env.AUTH_PORT || 3001);
+const PORT = Number(process.env.PORT || process.env.AUTH_PORT || 3001);
 const CODE_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -29,13 +30,13 @@ const OPERATING_START_MINUTES = 7 * 60;
 const OPERATING_END_MINUTES = 21 * 60;
 const SESSION_COOKIELESS_HEADER = 'authorization';
 let reminderJobRunning=false;
-const smtpHost = String(process.env.SMTP_HOST || '').trim();
-const smtpPort = Number(process.env.SMTP_PORT || 465);
-const smtpSecure = String(process.env.SMTP_SECURE || (smtpPort === 465 ? 'true' : 'false')).toLowerCase() === 'true';
-const smtpUser = String(process.env.SMTP_USER || '').trim();
-const smtpPass = String(process.env.SMTP_PASS || '').trim();
-const smtpFrom = String(process.env.SMTP_FROM || smtpUser).trim();
-const transporter = smtpHost && smtpUser && smtpPass ? nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpSecure, auth: { user: smtpUser, pass: smtpPass }, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000 }) : null;
+const emailGatewayUrl = String(
+  process.env.EMAIL_GATEWAY_URL || ''
+).trim();
+
+const emailGatewayKey = String(
+  process.env.EMAIL_GATEWAY_KEY || ''
+).trim();
 
 const allowedEmail = email => /^[^\s@]+@(gmail\.com|cmdi\.edu\.ph)$/i.test(String(email || '').trim());
 const allowedPosition = position => position === 'teacher';
@@ -52,16 +53,70 @@ async function verifyPassword(password, storedHash){
 const normalizeEmail = email => String(email || '').trim().toLowerCase();
 const normalizeStatus = status => ['PENDING','APPROVED','REJECTED','CANCELLED'].includes(status) ? status : 'PENDING';
 
-function smtpConfigurationMessage() {
-  if (!smtpHost || !smtpUser || !smtpPass) return 'SMTP is not configured. Open the project-root .env and set SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, and SMTP_FROM.';
+function emailGatewayConfigurationMessage() {
+  if (!emailGatewayUrl || !emailGatewayKey) {
+    return 'Email gateway is not configured. Set EMAIL_GATEWAY_URL and EMAIL_GATEWAY_KEY in Render.';
+  }
+
   return null;
 }
-function smtpErrorMessage(error) {
-  const code = error?.code, responseCode = error?.responseCode;
-  if (code === 'EAUTH' || responseCode === 535) return 'Gmail authentication failed. Check SMTP_USER and SMTP_PASS. For Gmail, use a 16-character Google App Password with 2-Step Verification enabled, not your normal Gmail password.';
-  if (code === 'ECONNECTION' || code === 'ETIMEDOUT' || code === 'ESOCKET') return `SMTP connection failed. Check SMTP_HOST (${smtpHost}), SMTP_PORT (${smtpPort}), SMTP_SECURE (${smtpSecure}), your internet connection, and whether the SMTP port is allowed.`;
-  if (code === 'EENVELOPE') return 'SMTP rejected the sender or recipient address. Check SMTP_FROM and the destination email address.';
-  return `SMTP email delivery failed${code ? ` (${code})` : ''}: ${error?.message || 'Unknown SMTP error.'}`;
+
+async function sendEmail({ to, subject, text, html }) {
+  const configError = emailGatewayConfigurationMessage();
+
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const response = await fetch(emailGatewayUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      key: emailGatewayKey,
+      to: normalizeEmail(to),
+      subject: String(subject || ''),
+      text: String(text || ''),
+      html: String(html || '')
+    }),
+    signal: AbortSignal.timeout(20000)
+  });
+
+  const responseText = await response.text();
+  let result;
+
+  try {
+    result = JSON.parse(responseText);
+  } catch {
+    throw new Error(
+      `Email gateway returned an unreadable response (HTTP ${response.status}). Check the Apps Script deployment.`
+    );
+  }
+
+  if (!response.ok || !result?.ok) {
+    throw new Error(
+      result?.message ||
+      `Email gateway rejected the request (HTTP ${response.status}).`
+    );
+  }
+
+  return result;
+}
+
+function emailGatewayErrorMessage(error) {
+  const message = String(
+    error?.message || error || 'Unknown email gateway error.'
+  );
+
+  if (
+    error?.name === 'TimeoutError' ||
+    /timed out|timeout/i.test(message)
+  ) {
+    return 'Email gateway request timed out. Check the Apps Script deployment and URL.';
+  }
+
+  return `Email gateway failed: ${message}`;
 }
 
 function createCode() { return String(crypto.randomInt(0, 1000000)).padStart(6, '0'); }
@@ -90,24 +145,38 @@ async function requireAuth(req,res){
   req.orgUser=user;
   return user;
 }
-async function requireAdminAuth(req,res){
-  const user=await requireAuth(req,res);
-  if(!user)return null;
-  if(String(user.role||'').toLowerCase()!=='admin'){res.status(403).json({message:'Administrator access is required.'});return null;}
+
+async function requireAdminAuth(req, res) {
+  const user = await requireAuth(req, res);
+  if (!user) return null;
+
+  if (String(user.role || '').toLowerCase() !== 'admin') {
+    res.status(403).json({
+      message: 'Administrator access is required.'
+    });
+    return null;
+  }
+
   return user;
 }
+
+
 function userOwnsReservation(user,row){ return Number(user.id)===Number(row.user_id) || (row.user_id==null && normalizeEmail(user.email)===normalizeEmail(row.user_email)); }
 function validDbTime(value){ const m=String(value||'').match(/^(\d{2}):(\d{2}):(\d{2})$/); if(!m)return false; const h=Number(m[1]),mi=Number(m[2]),sec=Number(m[3]); return h>=0&&h<24&&mi>=0&&mi<60&&sec>=0&&sec<60; }
 function dbTimeMinutes(value){ if(!validDbTime(value)) return NaN; const [h,m]=String(value).split(':').map(Number); return h*60+m; }
 
 async function sendCode(email, code, purpose) {
-  const configError = smtpConfigurationMessage();
-  if (configError || !transporter) throw new Error(configError || 'SMTP is not configured.');
+  
   const labels = { login: 'Verify your email', signup: 'Verify your email', forgot: 'Password reset' };
   const subject = `ORGROOM — ${labels[purpose] || 'Verification'}`;
   const text = `Hello,\n\nThank you for using ORGROOM — Facility Reservation Platform.\n\nYour verification code is: ${code}\n\nThis code expires in 10 minutes and can only be used once.\n\nIf you did not request this code, you can ignore this email.\n\nRegards,\nORGROOM\nFacility Reservation Platform`;
   const html = `<div style="margin:0;background:#f5f7fb;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#172033"><div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e9f2;border-radius:20px;overflow:hidden"><div style="padding:28px 32px;background:#2563eb;color:#fff"><div style="font-size:22px;font-weight:800;letter-spacing:.5px">ORGROOM</div><div style="margin-top:4px;font-size:13px;opacity:.9">Facility Reservation Platform</div></div><div style="padding:32px"><h1 style="margin:0 0 12px;font-size:24px">Verify your email</h1><p style="margin:0 0 24px;line-height:1.6;color:#596579">Thank you for registering with ORGROOM. Enter the verification code below to continue.</p><div style="padding:20px;text-align:center;background:#f4f7ff;border:1px solid #dce5ff;border-radius:14px"><div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:1.2px">Verification code</div><div style="margin-top:8px;font-size:36px;font-weight:800;letter-spacing:8px;color:#1d4ed8">${code}</div></div><p style="margin:22px 0 0;line-height:1.6;color:#596579">This code expires in <strong>10 minutes</strong> and can only be used once.</p><p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#7b8494">If you did not create this account or request this code, you can safely ignore this email.</p></div></div></div>`;
-  await transporter.sendMail({ from: smtpFrom, to: email, subject, text, html });
+  await sendEmail({
+  to: email,
+  subject,
+  text,
+  html
+});
 }
 
 function escapeHtml(value=''){
@@ -166,7 +235,7 @@ async function sendNotificationEmail(notificationId, recipientEmail, type, detai
     await dbQuery('INSERT INTO notification_email_deliveries (notification_id,recipient_email,delivery_status,attempts) VALUES (?,?,\'PENDING\',1)',[notificationId,email]);
   }
   try{
-    if(!transporter) throw new Error(smtpConfigurationMessage() || 'SMTP is not configured.');
+    
     const d=details;
     const actionTab=d.isAdmin ? 'requests' : 'reservations';
     const actionUrl=`${notificationBaseUrl()}${notificationReservationPath(d.reservationId || 0,actionTab)}`;
@@ -183,7 +252,12 @@ async function sendNotificationEmail(notificationId, recipientEmail, type, detai
     const action=isNew||isApproved||isRejected||isModified ? `<p style="margin:24px 0"><a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 18px;background:#315bea;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">${isNew?'Review Reservation Request':'Open ORGROOM'}</a></p>` : '';
     const text=`Hello ${d.recipientName || 'ORGROOM user'},\n\n${intro}\n\nRequester: ${d.requesterName}\nRequester email: ${d.requesterEmail}\nBuilding: ${d.building}\nRoom: ${d.room}\nDate: ${d.date}\nTime: ${d.time}\nPurpose: ${d.purpose}\nStatus: ${statusLabel}${d.adminNotes&&isRejected?`\nReason: ${d.adminNotes}`:''}${d.decisionBy?`\n${isApproved?'Approved by':'Reviewed by'}: ${d.decisionBy}`:''}\n\nPlease log in to ORGROOM for more details.\n\nORGROOM\nFacility Reservation Platform`;
     const html=`<div style="margin:0;background:#f5f7fb;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#172033"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e5e9f2;border-radius:20px;overflow:hidden"><div style="padding:26px 30px;background:#315bea;color:#fff"><div style="font-size:22px;font-weight:800;letter-spacing:.4px">ORGROOM</div><div style="margin-top:4px;font-size:13px;opacity:.9">Facility Reservation Platform</div></div><div style="padding:30px"><h1 style="margin:0 0 10px;font-size:23px">${escapeHtml(subject.replace('ORGROOM — ','ORGROOM — '))}</h1><p style="margin:0 0 22px;color:#667085;line-height:1.6">${escapeHtml(intro)}</p><div style="padding:18px;background:#f7f9fc;border:1px solid #e6eaf0;border-radius:14px"><p style="margin:0 0 8px"><strong>Requester:</strong> ${escapeHtml(d.requesterName)}</p><p style="margin:8px 0"><strong>Building:</strong> ${escapeHtml(d.building)}</p><p style="margin:8px 0"><strong>Room:</strong> ${escapeHtml(d.room)}</p><p style="margin:8px 0"><strong>Date:</strong> ${escapeHtml(d.date)}</p><p style="margin:8px 0"><strong>Time:</strong> ${escapeHtml(d.time)}</p><p style="margin:8px 0"><strong>Purpose:</strong> ${escapeHtml(d.purpose)}</p><p style="margin:8px 0"><strong>Status:</strong> ${escapeHtml(statusLabel)}</p>${reviewer}${reason}</div>${action}<p style="margin:24px 0 0;font-size:12px;color:#7b8494;line-height:1.6">ORGROOM — Facility Reservation Platform</p></div></div></div>`;
-    await transporter.sendMail({from:smtpFrom,to:email,subject,text,html});
+    await sendEmail({
+  to: email,
+  subject,
+  text,
+  html
+});
     await dbQuery("UPDATE notification_email_deliveries SET delivery_status='SENT',sent_at=NOW(),error_message='' WHERE notification_id=?",[notificationId]);
   }catch(error){
     const message=String(error?.message||error).slice(0,1000);
@@ -354,8 +428,61 @@ async function withReservationLock(key,work){
   }
 }
 
-app.get('/api/health', async (_req,res) => { try { await dbQuery('SELECT 1'); res.json({ok:true,database:true,emailConfigured:Boolean(transporter)}); } catch(e) { res.status(503).json({ok:false,database:false,message:'Database connection failed.'}); } });
-app.post('/api/auth/test-email', async (req,res) => { try { if(!await requireAdminAuth(req,res)) return; const configError=smtpConfigurationMessage(); if(configError||!transporter) return res.status(503).json({ok:false,message:configError}); const to=normalizeEmail(req.body.email||smtpUser); await transporter.verify(); await transporter.sendMail({from:smtpFrom,to,subject:'ORGROOM SMTP connection test',text:'ORGROOM SMTP is configured correctly and can deliver email.'}); res.json({ok:true,message:`SMTP connection and test email succeeded. Check ${to}.`}); } catch(e){res.status(502).json({ok:false,message:smtpErrorMessage(e)})} });
+
+app.get('/api/health', async (_req, res) => {
+  try {
+    await dbQuery('SELECT 1');
+
+    res.json({
+      ok: true,
+      database: true,
+      emailConfigured: Boolean(
+        emailGatewayUrl && emailGatewayKey
+      )
+    });
+  } catch (e) {
+    res.status(503).json({
+      ok: false,
+      database: false,
+      message: 'Database connection failed.'
+    });
+  }
+});
+
+app.post('/api/auth/test-email', async (req, res) => {
+  try {
+    const admin = await requireAdminAuth(req, res);
+    if (!admin) return;
+
+    const configError = emailGatewayConfigurationMessage();
+
+    if (configError) {
+      return res.status(503).json({
+        ok: false,
+        message: configError
+      });
+    }
+
+    const to = normalizeEmail(req.body.email || admin.email);
+
+    await sendEmail({
+      to,
+      subject: 'ORGROOM Email Gateway Test',
+      text: 'ORGROOM email gateway is configured correctly and can send email.',
+      html: '<p>ORGROOM email gateway is configured correctly and can send email.</p>'
+    });
+
+    res.json({
+      ok: true,
+      message: `Test email sent successfully. Check ${to}.`
+    });
+  } catch (e) {
+    res.status(502).json({
+      ok: false,
+      message: emailGatewayErrorMessage(e)
+    });
+  }
+});
 
 app.post('/api/auth/login/request-code', async (req,res) => { try { const email=normalizeEmail(req.body.email), password=req.body.password; if(!allowedEmail(email)||!password)return res.status(400).json({message:'Valid email and password are required.'}); const rows=await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]); const user=rows[0]; if(!user||!(await verifyPassword(password,user.password_hash)))return res.status(401).json({message:'Invalid email or password.'});
     if(user && /^[a-f0-9]{64}$/i.test(String(user.password_hash||''))){ const migrated=await bcrypt.hash(String(password),12); await dbQuery('UPDATE users SET password_hash=? WHERE id=?',[migrated,user.id]); user.password_hash=migrated; } if(Boolean(user.is_verified)){const token=await createSession(user.id);return res.json({message:'Login successful.',verified:true,user:profileFromUser(user),token,expiresInSeconds:SESSION_TTL_MS/1000});} try{await issueCode(email,'login',{userId:user.id});}catch(e){console.error(`ORGROOM login verification email failed: ${e.message||e}`);return res.status(503).json({message:'We could not send the verification email right now. Please try again.'});} res.json({message:'Your email is not verified yet. A 6-digit verification code was sent to your email. The code expires in 10 minutes.',verified:false,requiresVerification:true,expiresInSeconds:600}); }catch(e){res.status(400).json({message:e.message||'Unable to sign in.'})} });
@@ -529,14 +656,18 @@ function reminderDateTimeSql(which){
 }
 
 async function sendReservationReminder(row,type){
-  if(!transporter) throw new Error(smtpConfigurationMessage() || 'SMTP is not configured.');
   const isStart=type==='START';
   const subject=isStart ? 'ORGROOM Reservation Reminder — Starting Soon' : 'ORGROOM Reservation Reminder — Ending Soon';
   const lead=isStart ? 'Your reservation is about to start.' : 'Your reservation is ending soon.';
   const extra=isStart ? `Your reservation at ${row.building} — ${row.room_name} starts in about 15 minutes.` : `Your reservation for ${row.building} — ${row.room_name} ends in about 15 minutes. Please prepare to leave the room on time.`;
   const text=`Hello ${row.verified_user_name || row.user_name || 'ORGROOM user'},\n\n${lead}\n\n${extra}\n\nReservation date: ${String(row.reservation_date).slice(0,10)}\nTime: ${row.time_slot}\nBuilding: ${row.building}\nRoom: ${row.room_name}\n\nORGROOM — Facility Reservation Platform`;
   const html=`<div style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2937"><h2>${subject}</h2><p>Hello ${row.verified_user_name || row.user_name || 'ORGROOM user'},</p><p>${lead}</p><p>${extra}</p><div style="padding:16px;border:1px solid #e5e7eb;border-radius:12px"><b>${row.building} — ${row.room_name}</b><br/>${String(row.reservation_date).slice(0,10)}<br/>${row.time_slot}</div><p>ORGROOM — Facility Reservation Platform</p></div>`;
-  await transporter.sendMail({from:smtpFrom,to:normalizeEmail(row.recipient_email || row.user_email),subject,text,html});
+  await sendEmail({
+  to: normalizeEmail(row.recipient_email || row.user_email),
+  subject,
+  text,
+  html
+});
 }
 
 async function ensureReminderState(reservationId, reminderType, scheduledMs){
@@ -667,7 +798,7 @@ app.put('/api/reservations/:id',async(req,res)=>{try{const user=await requireAut
 app.delete('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=String(user.role||'').toLowerCase()==='admin';if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to cancel this reservation.'});if(current.status==='REJECTED'||current.status==='CANCELLED')return res.status(409).json({message:'This reservation is already closed.'});if(!isAdmin&& !['PENDING','APPROVED'].includes(current.status))return res.status(403).json({message:'Only your pending or approved reservation can be cancelled.'});await dbQuery("UPDATE reservations SET status='CANCELLED',decision_by_user_id=?,decision_at=NOW(),admin_notes=CASE WHEN admin_notes IS NULL OR admin_notes='' THEN 'Cancelled by requester.' ELSE admin_notes END WHERE id=?",[user.id,id]);await notifyReservationEvent(id,'RESERVATION_CANCELLED');const row=(await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]))[0];res.json(mapReservation(row));}catch(e){res.status(e.status||500).json({message:e.message||'Unable to cancel reservation.'})}});
 
 async function retryFailedNotificationEmails(){
-  if(!transporter) return;
+if (!emailGatewayUrl || !emailGatewayKey) return;
   try{
     const rows=await dbQuery(`SELECT d.notification_id,d.recipient_email,n.notification_type,n.reservation_id,r.* ,u.name AS recipient_name
       FROM notification_email_deliveries d
@@ -688,6 +819,21 @@ setInterval(processReservationReminders,30000);
 setInterval(retryFailedNotificationEmails,60000);
 processReservationReminders();
 retryFailedNotificationEmails();
-if(transporter){transporter.verify().then(()=>console.log(`SMTP ready: ${smtpHost}:${smtpPort} (secure=${smtpSecure})`)).catch(e=>console.error(`SMTP configuration check failed: ${smtpErrorMessage(e)}`));}else console.warn('SMTP is not configured. Email verification will not work until .env is filled in.');
-try{await dbQuery('SELECT 1');console.log('ORGROOM MariaDB connected.');}catch(e){console.error(`ORGROOM database connection failed: ${e.message}`);}
-app.listen(PORT,'0.0.0.0',()=>console.log(`ORGROOM API running on http://0.0.0.0:${PORT}`));
+if (emailGatewayUrl && emailGatewayKey) {
+  console.log('ORGROOM email gateway is configured.');
+} else {
+  console.warn(
+    'ORGROOM email gateway is not configured. Email sending is disabled.'
+  );
+}
+
+try {
+  await dbQuery('SELECT 1');
+  console.log('ORGROOM MariaDB connected.');
+} catch (e) {
+  console.error(`ORGROOM database connection failed: ${e.message}`);
+}
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`ORGROOM API running on http://0.0.0.0:${PORT}`);
+});
