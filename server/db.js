@@ -178,7 +178,7 @@ export async function ensureDatabase() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
-  // Add missing columns without using unsupported IF NOT EXISTS syntax.
+  // Add missing columns without unsupported IF NOT EXISTS syntax.
   await addColumnIfMissing(
     'users',
     'is_verified',
