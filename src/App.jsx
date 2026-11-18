@@ -921,6 +921,209 @@ function AdminSidebar({
 
 
 /* ============================================================
+   GLOBAL SMART SEARCH
+   Uses the authenticated API and existing ORGROOM destinations.
+   ============================================================ */
+function HighlightMatch({ value='', query='' }) {
+  const text=String(value ?? '');
+  const terms=String(query||'').trim().split(/\s+/).filter(Boolean);
+  if(!terms.length) return text;
+  const escaped=terms.map(term=>term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  const matcher=new RegExp(`(${escaped.join('|')})`,'ig');
+  return text.split(matcher).map((part,index)=>
+    terms.some(term=>part.toLowerCase()===term.toLowerCase())
+      ? <mark className="global-search-highlight" key={`${part}-${index}`}>{part}</mark>
+      : <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>
+  );
+}
+
+function searchGroups(data={}){
+  return [
+    {key:'rooms',title:'ROOMS',items:data.rooms||[]},
+    {key:'availableRooms',title:'AVAILABLE ROOMS',items:data.availableRooms||[]},
+    {key:'people',title:'PEOPLE',items:data.people||[]},
+    {key:'pages',title:'PAGES',items:data.pages||[]}
+  ].filter(group=>group.items.length);
+}
+
+function SearchResultIcon({item}){
+  if(item.type==='room') return <DoorOpen/>;
+  if(item.type==='available_room') return <CheckCircle2/>;
+  if(item.type==='person') return <UserRound/>;
+  if(item.tab==='calendar') return <CalendarDays/>;
+  if(item.tab==='reservations' || item.tab==='requests') return <ClipboardList/>;
+  if(item.tab==='user-management') return <Users/>;
+  if(item.tab==='profile') return <UserRound/>;
+  return <LayoutDashboard/>;
+}
+
+function SearchResultRow({item,query,onSelect,active=false}){
+  const availability=item.availabilityStatus;
+  const availabilityLabel=availability==='AVAILABLE'?'Available now':availability==='OCCUPIED'?'Occupied':availability==='PENDING'?'Pending request':availability==='UNAVAILABLE'?'Unavailable':availability==='OUTSIDE_HOURS'?'Outside operating hours':availability==='UNKNOWN'?'Availability unverified':'';
+  return (
+    <button
+      type="button"
+      className={`global-search-result ${active?'active':''}`}
+      role="option"
+      aria-selected={active}
+      onMouseDown={event=>event.preventDefault()}
+      onClick={()=>onSelect(item)}
+    >
+      <span className={`global-search-result-icon ${item.type==='available_room'?'available':''}`}><SearchResultIcon item={item}/></span>
+      <span className="global-search-result-copy">
+        <b><HighlightMatch value={item.title} query={query}/></b>
+        {item.description && <small><HighlightMatch value={item.description} query={query}/></small>}
+      </span>
+      <span className="global-search-result-meta">
+        {availabilityLabel && <small className={`search-availability ${String(availability).toLowerCase()}`}>{availabilityLabel}</small>}
+        {item.role && <small>{item.role}</small>}
+        <span className="global-search-category">{item.type==='available_room'?'AVAILABLE':item.type==='room'?'ROOM':item.type==='person'?'PERSON':'PAGE'}</span>
+      </span>
+    </button>
+  );
+}
+
+function SearchResultGroups({data,query,onSelect,activeIndex=-1}){
+  const groups=searchGroups(data);
+  let index=0;
+  if(!groups.length) return <div className="global-search-empty"><Search/><span>No matching results found.</span></div>;
+  return groups.map(group=>(
+    <section className="global-search-group" key={group.key}>
+      <div className="global-search-group-title">{group.title}<span>{group.items.length}</span></div>
+      {group.items.map(item=>{
+        const current=index++;
+        return <SearchResultRow key={`${item.type}-${item.id||item.tab||item.title}`} item={item} query={query} onSelect={onSelect} active={current===activeIndex}/>;
+      })}
+    </section>
+  ));
+}
+
+function GlobalSearch({user,onSelect,onSubmit}){
+  const [query,setQuery]=useState('');
+  const [results,setResults]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const [open,setOpen]=useState(false);
+  const [mobileOpen,setMobileOpen]=useState(false);
+  const [activeIndex,setActiveIndex]=useState(-1);
+  const wrapperRef=React.useRef(null);
+  const inputRef=React.useRef(null);
+  const requestSequence=React.useRef(0);
+  const flatResults=React.useMemo(()=>searchGroups(results||{}).flatMap(group=>group.items),[results]);
+  const trimmed=query.trim();
+
+  useEffect(()=>{
+    if(trimmed.length<2){
+      setResults(null);setLoading(false);setError('');setActiveIndex(-1);
+      return;
+    }
+    const sequence=++requestSequence.current;
+    const controller=new AbortController();
+    setLoading(true);setError('');setResults(null);setActiveIndex(-1);
+    const timer=setTimeout(()=>{
+      api(`/api/search?q=${encodeURIComponent(trimmed)}`,{signal:controller.signal})
+        .then(data=>{if(sequence===requestSequence.current){setResults(data);setLoading(false);setError('');}})
+        .catch(e=>{if(e.name!=='AbortError' && sequence===requestSequence.current){setResults(null);setLoading(false);setError(e.message||'Search is temporarily unavailable.');}});
+    },300);
+    return ()=>{clearTimeout(timer);controller.abort();};
+  },[trimmed]);
+
+  useEffect(()=>{
+    const handlePointerDown=event=>{
+      if(wrapperRef.current && !wrapperRef.current.contains(event.target)){
+        setOpen(false);setMobileOpen(false);setActiveIndex(-1);
+      }
+    };
+    document.addEventListener('pointerdown',handlePointerDown);
+    return ()=>document.removeEventListener('pointerdown',handlePointerDown);
+  },[]);
+
+  useEffect(()=>{
+    if(mobileOpen) requestAnimationFrame(()=>inputRef.current?.focus());
+  },[mobileOpen]);
+
+  const choose=item=>{
+    setOpen(false);setMobileOpen(false);setActiveIndex(-1);
+    onSelect?.(item);
+  };
+  const submit=()=>{
+    if(!trimmed)return;
+    setOpen(false);setMobileOpen(false);setActiveIndex(-1);
+    onSubmit?.(trimmed);
+  };
+  const clear=()=>{setQuery('');setResults(null);setError('');setOpen(false);setActiveIndex(-1);inputRef.current?.focus();};
+  const handleKeyDown=event=>{
+    if(event.key==='ArrowDown'){
+      event.preventDefault();setOpen(true);
+      if(flatResults.length)setActiveIndex(current=>current<0?0:(current+1)%flatResults.length);
+    }else if(event.key==='ArrowUp'){
+      event.preventDefault();setOpen(true);
+      if(flatResults.length)setActiveIndex(current=>current<=0?flatResults.length-1:current-1);
+    }else if(event.key==='Enter'){
+      event.preventDefault();
+      if(open && activeIndex>=0 && flatResults[activeIndex]) choose(flatResults[activeIndex]);
+      else submit();
+    }else if(event.key==='Escape'){
+      setOpen(false);setMobileOpen(false);setActiveIndex(-1);
+    }
+  };
+  const showPanel=open && trimmed.length>=2;
+  const inputMarkup=(compact=false)=>(
+    <div className={`global-search-field ${compact?'compact':''}`}>
+      <Search aria-hidden="true"/>
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={event=>{setQuery(event.target.value);setOpen(true);}}
+        onFocus={()=>{if(trimmed.length>=2)setOpen(true);}}
+        onKeyDown={handleKeyDown}
+        placeholder="Search rooms, people, and availability..."
+        aria-label="Search rooms, people, and availability"
+        aria-autocomplete="list"
+        aria-expanded={showPanel}
+        autoComplete="off"
+      />
+      {query && <button type="button" className="global-search-clear" onClick={clear} aria-label="Clear search" title="Clear search"><X/></button>}
+    </div>
+  );
+  const suggestionPanel=showPanel && (
+    <div className="global-search-dropdown" role="listbox" aria-label="Search suggestions">
+      <div className="global-search-dropdown-head"><span>SEARCH SUGGESTIONS</span>{loading&&<span className="global-search-loading"><i/> Searching</span>}</div>
+      {loading ? <div className="global-search-message"><span className="global-search-spinner"/> Finding matching ORGROOM records…</div> : error ? <div className="global-search-message error">{error}</div> : results ? <SearchResultGroups data={results} query={trimmed} onSelect={choose} activeIndex={activeIndex}/> : null}
+      {!loading && !error && results && <button type="button" className="global-search-all-results" onMouseDown={event=>event.preventDefault()} onClick={submit}>View all search results <ChevronRight/></button>}
+    </div>
+  );
+
+  return (
+    <div className="global-search" ref={wrapperRef}>
+      <div className="global-search-desktop">{inputMarkup(false)}{!mobileOpen&&suggestionPanel}</div>
+      <button type="button" className="global-search-mobile-toggle" aria-label="Open global search" title="Search" onClick={()=>{setMobileOpen(true);setOpen(true);}}><Search/></button>
+      {mobileOpen && <div className="global-search-mobile-panel"><div className="global-search-mobile-head">{inputMarkup(true)}<button type="button" className="global-search-mobile-close" onClick={()=>{setMobileOpen(false);setOpen(false);}} aria-label="Close search"><X/></button></div>{suggestionPanel}</div>}
+    </div>
+  );
+}
+
+function SearchResultsPage({query,user,onSelect}){
+  const [results,setResults]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState('');
+  useEffect(()=>{
+    const controller=new AbortController();
+    setLoading(true);setError('');setResults(null);
+    api(`/api/search?q=${encodeURIComponent(query||'')}`,{signal:controller.signal})
+      .then(data=>{setResults(data);setLoading(false);})
+      .catch(e=>{if(e.name!=='AbortError'){setError(e.message||'Unable to load search results.');setLoading(false);}});
+    return ()=>controller.abort();
+  },[query]);
+  return (
+    <div className="page global-search-results-page">
+      <div className="page-heading"><div><span className="eyebrow">GLOBAL SEARCH</span><h2>Results for “{query}”</h2><p>Search results are limited to records and destinations you are allowed to access.</p></div></div>
+      {loading ? <div className="global-search-page-state"><span className="global-search-spinner"/> Searching ORGROOM…</div> : error ? <div className="alert danger"><CircleAlert/>{error}</div> : results ? <div className="global-search-results-groups"><SearchResultGroups data={results} query={query} onSelect={onSelect}/></div> : null}
+    </div>
+  );
+}
+
+/* ============================================================
    TOPBAR
    ============================================================ */
 
@@ -937,7 +1140,9 @@ function Topbar({
   unreadCount=0,
   onNotificationOpen,
   onNotificationClose,
-  notificationsOpen=false
+  notificationsOpen=false,
+  onSearchSelect,
+  onSearchSubmit
 }){
 
   return (
@@ -951,13 +1156,14 @@ function Topbar({
       </button>
 
 
-      <div>
+      <div className="topbar-title">
 
         <h1>{title}</h1>
         <p>{subtitle}</p>
 
       </div>
 
+      <GlobalSearch user={user} onSelect={onSearchSelect} onSubmit={onSearchSubmit}/>
 
       <div className="top-actions">
 
@@ -1806,13 +2012,28 @@ function Rooms({
   user,
   weekly,
   reservations,
-  onBook
+  onBook,
+  focusRoomId=null,
+  focusRoomKey=0
 }){
 
   const [q,setQ]=useState('');
   const [building,setBuilding]=useState('ALL');
   const [type,setType]=useState('ALL');
   const [liveTick,setLiveTick]=useState(Date.now());
+  const appliedFocusKey=React.useRef(0);
+
+  useEffect(()=>{
+    if(!focusRoomId || appliedFocusKey.current===focusRoomKey)return;
+    const match=rooms.find(room=>Number(room.id)===Number(focusRoomId));
+    if(!match)return;
+    appliedFocusKey.current=focusRoomKey;
+    const display=roomDisplayData(match);
+    setQ(display._displayName);
+    setBuilding(display._displayBuilding);
+    setType('ALL');
+  },[focusRoomId,focusRoomKey,rooms]);
+
 
   // Keep the recommendation display synchronized with the current clock.
   useEffect(()=>{const t=setInterval(()=>setLiveTick(Date.now()),10000);return()=>clearInterval(t);},[]);
@@ -1843,6 +2064,14 @@ function Rooms({
       .toLowerCase()
       .includes(q.toLowerCase())
   );
+
+  useEffect(()=>{
+    if(!focusRoomId)return;
+    const frame=window.requestAnimationFrame(()=>{
+      window.requestAnimationFrame(()=>document.getElementById(`orgroom-room-${focusRoomId}`)?.scrollIntoView({behavior:'smooth',block:'center'}));
+    });
+    return ()=>window.cancelAnimationFrame(frame);
+  },[focusRoomId,q,building,filtered.length]);
 
   const grouped=groupRoomsByBuilding(filtered);
 
@@ -1997,6 +2226,7 @@ function Rooms({
                 <RoomCard
                   key={room.id}
                   room={room}
+                  focused={Number(focusRoomId)===Number(room.id)}
                   onBook={()=>onBook(room)}
                 />
               ))}
@@ -2026,11 +2256,12 @@ function Rooms({
 
 function RoomCard({
   room,
-  onBook
+  onBook,
+  focused=false
 }){
 
   return (
-    <article className="room-card">
+    <article id={room.id!=null?`orgroom-room-${room.id}`:undefined} className={`room-card ${focused?'global-search-room-focused':''}`}>
 
       <div className="room-top">
 
@@ -2396,7 +2627,9 @@ function Calendar({
   rooms,
   reservations,
   weekly,
-  onBook
+  onBook,
+  focusInstructor=null,
+  onClearInstructorSearch
 }){
 
   const today=new Date();
@@ -2623,6 +2856,17 @@ function Calendar({
         </div>
 
       </div>
+
+      {focusInstructor && (
+        <section className="calendar-instructor-search-match" aria-live="polite">
+          <div>
+            <span className="eyebrow">TIMETABLE MATCH</span>
+            <strong>{focusInstructor.title}</strong>
+            <p>{focusInstructor.description}</p>
+          </div>
+          <button type="button" className="text-btn" onClick={onClearInstructorSearch}>Clear <X/></button>
+        </section>
+      )}
 
       <section className="monthly-calendar-card">
 
@@ -2895,10 +3139,12 @@ function Reservations({
   onEdit,
   onDelete,
   onRefresh,
-  focusId=null
+  focusId=null,
+  initialSearch=''
 }){
 
   const [q,setQ]=useState('');
+  useEffect(()=>{if(initialSearch)setQ(initialSearch);},[initialSearch]);
   const [status,setStatus]=useState('ALL');
   const [selected,setSelected]=useState(null);
 
@@ -2917,7 +3163,7 @@ function Reservations({
         status==='ALL' ||
         r.status===status
       ) &&
-      `${r.id} ${r.roomName} ${r.building} ${r.orgName} ${r.purpose}`
+      `${r.id} ${r.roomName} ${r.building} ${r.orgName} ${r.purpose} ${r.userName||''} ${r.userEmail||''}`
         .toLowerCase()
         .includes(q.toLowerCase())
   );
@@ -4053,7 +4299,7 @@ function RoomUsageCheck({user,requestConfirmation}){
 /* ============================================================
    ADMIN USER MANAGEMENT
    ============================================================ */
-function UserManagement(){
+function UserManagement({initialSearch=''}){
   const [users,setUsers]=useState([]);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
@@ -4062,6 +4308,8 @@ function UserManagement(){
   const [search,setSearch]=useState('');
   const [role,setRole]=useState('TEACHER');
   const [form,setForm]=useState({name:'',email:'',password:''});
+
+  useEffect(()=>{if(initialSearch)setSearch(initialSearch);},[initialSearch]);
 
   const loadUsers=async()=>{
     setLoading(true);
@@ -4245,14 +4493,20 @@ export default function App(){
   const [unreadNotifications,setUnreadNotifications]=useState(0);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
   const [focusReservationId,setFocusReservationId]=useState(null);
+  const [searchPageQuery,setSearchPageQuery]=useState('');
+  const [searchFocusRoomId,setSearchFocusRoomId]=useState(null);
+  const [searchFocusRoomKey,setSearchFocusRoomKey]=useState(0);
+  const [userSearchQuery,setUserSearchQuery]=useState('');
+  const [reservationsSearchQuery,setReservationsSearchQuery]=useState('');
+  const [calendarInstructorFocus,setCalendarInstructorFocus]=useState(null);
   const navigationHistory=React.useRef({initialized:false,lastTab:'home',handlingPop:false});
 
   useEffect(()=>{
     if(!user) return;
 
     const allowedTabs=user.role==='admin'
-      ? new Set(['home','calendar','rooms','reservations','requests','room-usage','user-management','profile'])
-      : new Set(['home','calendar','rooms','reservations','profile']);
+      ? new Set(['home','calendar','rooms','reservations','requests','room-usage','user-management','profile','search-results'])
+      : new Set(['home','calendar','rooms','reservations','profile','search-results']);
 
     const normalizeTab=value=>allowedTabs.has(value) ? value : 'home';
 
@@ -4502,6 +4756,38 @@ export default function App(){
     }
   };
 
+  const handleGlobalSearchSelect=item=>{
+    if(!item)return;
+    if(item.type==='room'||item.type==='available_room'){
+      setSearchFocusRoomId(Number(item.id));
+      setSearchFocusRoomKey(current=>current+1);
+      setTab('rooms');
+      return;
+    }
+    if(item.type==='person'){
+      if(item.personKind==='instructor'){
+        setCalendarInstructorFocus(item);
+        setTab('calendar');
+      }else if(item.personKind==='requester' && user.role==='admin'){
+        setReservationsSearchQuery(item.title||'');
+        setTab('reservations');
+      }else if(user.role==='admin'){
+        setUserSearchQuery(item.title||'');
+        setTab('user-management');
+      }else{
+        setTab('profile');
+      }
+      return;
+    }
+    if(item.type==='page' && item.tab){
+      setTab(item.tab);
+    }
+  };
+  const handleGlobalSearchSubmit=query=>{
+    setSearchPageQuery(query);
+    setTab('search-results');
+  };
+
   if(!authChecked){
     return <div className="auth-page"><div className="auth-card"><div className="auth-head"><span className="eyebrow">ORGROOM</span><h2>Restoring your session…</h2><p>Please wait while we securely reconnect your account.</p></div></div></div>;
   }
@@ -4556,6 +4842,11 @@ export default function App(){
     profile:[
       'Profile',
       'Account details and access settings.'
+    ],
+
+    'search-results':[
+      'Search results',
+      'Find rooms, available spaces, people, and ORGROOM pages.'
     ]
   };
 
@@ -4593,6 +4884,8 @@ export default function App(){
         weekly={weekly}
         reservations={reservations}
         onBook={openBooking}
+        focusRoomId={searchFocusRoomId}
+        focusRoomKey={searchFocusRoomKey}
       />
     );
 
@@ -4604,6 +4897,8 @@ export default function App(){
         reservations={reservations}
         weekly={weekly}
         onBook={openBooking}
+        focusInstructor={calendarInstructorFocus}
+        onClearInstructorSearch={()=>setCalendarInstructorFocus(null)}
       />
     );
 
@@ -4617,6 +4912,7 @@ export default function App(){
         onDelete={remove}
         onRefresh={load}
         focusId={focusReservationId}
+        initialSearch={reservationsSearchQuery}
       />
     );
 
@@ -4641,7 +4937,10 @@ export default function App(){
 
 
   if(tab==='user-management' && user.role==='admin')
-    content=(<UserManagement/>);
+    content=(<UserManagement initialSearch={userSearchQuery}/>);
+
+  if(tab==='search-results')
+    content=(<SearchResultsPage query={searchPageQuery} user={user} onSelect={handleGlobalSearchSelect}/>);
 
 
   if(tab==='profile')
@@ -4704,6 +5003,8 @@ export default function App(){
           notificationsOpen={notificationsOpen}
           onNotificationOpen={()=>{setNotificationsOpen(v=>!v);if(!notificationsOpen)loadNotifications();}}
           onNotificationClose={handleNotificationClose}
+          onSearchSelect={handleGlobalSearchSelect}
+          onSearchSubmit={handleGlobalSearchSubmit}
         />
 
 

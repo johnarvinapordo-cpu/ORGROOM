@@ -166,7 +166,7 @@ function validDbTime(value){ const m=String(value||'').match(/^(\d{2}):(\d{2}):(
 function dbTimeMinutes(value){ if(!validDbTime(value)) return NaN; const [h,m]=String(value).split(':').map(Number); return h*60+m; }
 
 async function sendCode(email, code, purpose) {
-  
+
   const labels = { login: 'Verify your email', signup: 'Verify your email', forgot: 'Password reset' };
   const subject = `ORGROOM — ${labels[purpose] || 'Verification'}`;
   const text = `Hello,\n\nThank you for using ORGROOM — Facility Reservation Platform.\n\nYour verification code is: ${code}\n\nThis code expires in 10 minutes and can only be used once.\n\nIf you did not request this code, you can ignore this email.\n\nRegards,\nORGROOM\nFacility Reservation Platform`;
@@ -235,7 +235,7 @@ async function sendNotificationEmail(notificationId, recipientEmail, type, detai
     await dbQuery('INSERT INTO notification_email_deliveries (notification_id,recipient_email,delivery_status,attempts) VALUES (?,?,\'PENDING\',1)',[notificationId,email]);
   }
   try{
-    
+
     const d=details;
     const actionTab=d.isAdmin ? 'requests' : 'reservations';
     const actionUrl=`${notificationBaseUrl()}${notificationReservationPath(d.reservationId || 0,actionTab)}`;
@@ -354,7 +354,7 @@ function mapReservation(row) {
   return { id: `OR-${String(row.id).padStart(3,'0')}`, dbId: Number(row.id), userId: row.user_id == null ? null : Number(row.user_id), userName: row.user_name, userEmail: row.user_email, userRole: row.user_role, orgName: row.organization_name, roomName: row.room_name, building: row.building, facilityId: row.facility_id, date: String(row.reservation_date).slice(0,10), timeSlot: row.time_slot, attendees: Number(row.attendees), purpose: row.purpose, eventType: row.event_type, status: row.status, submittedAt: String(row.submitted_at), adminNotes: row.admin_notes || '', decisionByUserId: row.decision_by_user_id == null ? null : Number(row.decision_by_user_id), decisionByName: row.decision_by_name || '', decisionByEmail: row.decision_by_email || '', decisionAt: row.decision_at ? String(row.decision_at) : null, priority: Boolean(row.priority), startMs: row.start_ms == null ? null : Number(row.start_ms), endMs: row.end_ms == null ? null : Number(row.end_ms), startReminderStatus: row.start_reminder_status || 'PENDING', startReminderSentAt: row.start_reminder_sent_at ? String(row.start_reminder_sent_at) : null, endReminderStatus: row.end_reminder_status || 'PENDING', endReminderSentAt: row.end_reminder_sent_at ? String(row.end_reminder_sent_at) : null };
 }
 function mapUsageCheck(row) {
-  return { id:Number(row.id || row.usage_id), reservationId:Number(row.reservation_id), status:row.usage_status || 'NOT_CHECKED', checkedAt:row.checked_at ? String(row.checked_at) : null, checkedBy:row.checked_by_name || '', checkedByEmail:row.checked_by_email || '', note:row.usage_note || row.note || '', createdAt:row.usage_created_at ? String(row.usage_created_at) : (row.created_at ? String(row.created_at) : null), updatedAt:row.usage_updated_at ? String(row.usage_updated_at) : (row.updated_at ? String(row.updated_at) : null) };
+  return { id:Number(row.id || row.usage_id), reservationId:Number(row.reservation_id), status:row.usage_status || 'NOT_CHECKED', checkedAt:row.checked_at ? String(row.checked_at) : null, checkedBy:row.checked_by_name || '', checkedByEmail:row.checked_by_email || '', note:row.usage_note || row.note || '', createdAt:row.usage_created_at ? String(row.usage_created_at) : (row.created_at ? String(row.created_at) : null), updatedAt:row.usage_updated_at ? String(row.updated_at) : (row.updated_at ? String(row.updated_at) : null) };
 }
 
 function mapWeekly(row) { return { id: Number(row.id), facilityId: row.facility_id, dayOfWeek: row.day_of_week, startTime: String(row.start_time).slice(0,5), endTime: String(row.end_time).slice(0,5), activityName: row.activity_name, organizationName: row.organization_name || row.program || '', courseCode: row.course_code || '', courseTitle: row.course_title || row.activity_name || '', program: row.program || '', yearBlock: row.year_block || '', instructor: row.instructor || '', termStart: row.term_start ? String(row.term_start).slice(0,10) : '', termEnd: row.term_end ? String(row.term_end).slice(0,10) : '', termDatesText: row.term_dates_text || '', sourceSheet: row.source_sheet || '', description: row.description || '', isActive: Boolean(row.is_active) }; }
@@ -490,7 +490,7 @@ app.post('/api/auth/login/verify', async(req,res)=>{try{const email=normalizeEma
 app.get('/api/auth/me',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.json({user:profileFromUser(user)});}catch(e){res.status(401).json({message:'Unable to restore your session.'});}});
 app.post('/api/auth/logout',async(req,res)=>{try{const raw=String(req.headers[SESSION_COOKIELESS_HEADER]||'');if(raw.toLowerCase().startsWith('bearer '))await dbQuery('DELETE FROM auth_sessions WHERE token_hash=?',[hashSessionToken(raw.slice(7).trim())]);res.json({message:'Signed out.'});}catch(e){res.status(500).json({message:'Unable to sign out.'});}});
 
-app.post('/api/auth/signup/request-code',async(req,res)=>{try{const email=normalizeEmail(req.body.email),password=req.body.password,position=req.body.position;if(!allowedEmail(email))return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});if(!strongPassword(password))return res.status(400).json({message:'Password must be at least 8 characters and contain a letter and a number.'});if(position!=='teacher')return res.status(400).json({message:'Only Teacher accounts can be created through public registration.'});const existing=(await dbQuery('SELECT id,is_verified FROM users WHERE email=? LIMIT 1',[email]))[0];if(existing)return res.json({message:'If this email is already registered, please sign in instead. New accounts receive a verification code by email.',alreadyExists:true});const passwordHash=await bcrypt.hash(password,12);const role='teacher';const organization='Academic Faculty';const department='Academic Faculty';const result=await dbQuery('INSERT INTO users (name,email,password_hash,role,organization,department,position,is_verified) VALUES (?,?,?,?,?,?,?,0)',[email.split('@')[0],email,passwordHash,role,organization,department,position]);try{await issueCode(email,'signup',{userId:result.insertId});}catch(e){console.error(`ORGROOM signup verification email failed for ${email}: ${e.message||e}`);return res.status(503).json({message:'Your account was created, but we could not send the verification email right now. Please use Resend Code after configuring email delivery.'});}res.json({message:'Your account was created but is not verified yet. A 6-digit verification code was sent to your email. The code expires in 10 minutes.',expiresInSeconds:600});}catch(e){console.error(`ORGROOM signup failed: ${e.message||e}`);res.status(400).json({message:e.message||'Unable to start account verification.'})}});
+app.post('/api/auth/signup/request-code',async(req,res)=>{try{const email=normalizeEmail(req.body.email),password=req.body.password,position=req.body.position;if(!allowedEmail(email))return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});if(!strongPassword(password))return res.status(400).json({message:'Password must be at least 8 characters and contain a letter and a number.'});if(position!=='teacher')return res.status(400).json({message:'Only Teacher accounts can be created through public registration.'});const existing=(await dbQuery('SELECT id,is_verified FROM users WHERE email=? LIMIT 1',[email]))[0];if(existing)return res.json({message:'If this email is already registered, please sign in instead. New accounts receive a verification code by email.',alreadyExists:true});const passwordHash=await bcrypt.hash(password,12);const role='teacher';const organization='Academic Faculty';const department='Academic Faculty';const result=await dbQuery('INSERT INTO users (name,email,password_hash,role,organization,department,position,is_verified) VALUES (?,?,?,?,?,?,?,0)',[email.split('@')[0],email,passwordHash,role,organization,department,position]);try{await issueCode(email,'signup',{userId:result.insertId});}catch(e){console.error(`ORGROOM signup verification email failed: ${e.message||e}`);return res.status(503).json({message:'Your account was created, but we could not send the verification email right now. Please use Resend Code after configuring email delivery.'});}res.json({message:'Your account was created but is not verified yet. A 6-digit verification code was sent to your email. The code expires in 10 minutes.',expiresInSeconds:600});}catch(e){console.error(`ORGROOM signup failed: ${e.message||e}`);res.status(400).json({message:e.message||'Unable to start account verification.'})}});
 app.post('/api/auth/signup/verify',async(req,res)=>{try{const email=normalizeEmail(req.body.email);const user=(await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user)return res.status(404).json({message:'Account not found.'});if(Boolean(user.is_verified))return res.json({message:'Account is already verified. Please sign in.',user:profileFromUser(user)});await consumeCode(email,'signup',req.body.code);await dbQuery('UPDATE users SET is_verified=1 WHERE id=?',[user.id]);const rows=await dbQuery('SELECT * FROM users WHERE id=?',[user.id]);res.json({message:'Account verified successfully. Please sign in.',user:profileFromUser({...rows[0],is_verified:1})});}catch(e){res.status(400).json({message:e.message||'Account verification failed.'})}});
 app.post('/api/auth/verification/resend',async(req,res)=>{try{const email=normalizeEmail(req.body.email),purpose=String(req.body.purpose||'');if(!['signup','login'].includes(purpose)||!allowedEmail(email))return res.status(400).json({message:'Invalid verification request.'});const user=(await dbQuery('SELECT id,is_verified FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user)return res.status(400).json({message:'Invalid verification request.'});if(Boolean(user.is_verified))return res.status(400).json({message:'This account is already verified. You can sign in normally.'});await issueCode(email,purpose,{userId:user.id});res.json({message:'A new 6-digit verification code was sent. The previous code is no longer valid. The new code expires in 10 minutes.',expiresInSeconds:600});}catch(e){if(String(e.message||'').includes('Please wait 30 seconds'))return res.status(429).json({message:e.message});console.error(`ORGROOM verification resend failed: ${e.message||e}`);res.status(503).json({message:'We could not send the verification email right now. Please try again later.'})}});
 
@@ -643,6 +643,196 @@ function buildRoomAvailabilitySegments(weeklyRows, reservationRows){
   }
   return segments;
 }
+
+// Authenticated global search. Room availability is calculated with the same
+// segment builder used by /api/room-schedule, never inferred from facility rows.
+app.get('/api/search',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);
+    if(!user)return;
+    const query=String(req.query.q||'').replace(/[\%_]/g,' ').replace(/\s+/g,' ').trim().slice(0,80);
+    const lowerQuery=query.toLowerCase();
+    if(query.length<2){res.set('Cache-Control','no-store');return res.json({query,rooms:[],availableRooms:[],people:[],pages:[]});}
+
+    const wantsAvailability=/\b(available|availability|free|open)\b/i.test(query);
+    const wantsClassroom=/\bclassrooms?\b/i.test(query);
+    const wantsLaboratory=/\b(labs?|laboratory|laboratories)\b/i.test(query);
+    const roomTerm=query.replace(/\b(available|availability|free|open|currently|right|now|rooms?|classrooms?|labs?|laboratory|laboratories|in|the|for|and)\b/gi,' ').replace(/\s+/g,' ').trim();
+    const roomSearchTerms=(roomTerm||query).replace(/[^\p{L}\p{N}\s]/gu,' ').split(/\s+/).filter(Boolean).slice(0,6);
+    const isAdmin=String(user.role||'').toLowerCase()==='admin';
+
+    let facilities;
+    if(wantsAvailability && !roomTerm){
+      facilities=await dbQuery('SELECT id,name,building,building_code,capacity,type,status FROM facilities ORDER BY building,name LIMIT 150');
+    }else if(!roomSearchTerms.length){
+      facilities=[];
+    }else{
+      // Match each meaningful word against the room name, building, or type.
+      // This also handles punctuation such as "School Building — Room 2".
+      const termFilterSql=roomSearchTerms.map(()=>`(LOWER(COALESCE(name,'')) LIKE LOWER(?) OR LOWER(COALESCE(building,'')) LIKE LOWER(?) OR LOWER(COALESCE(type,'')) LIKE LOWER(?))`);
+      const termFilterParams=roomSearchTerms.flatMap(term=>[`%${term}%`,`%${term}%`,`%${term}%`]);
+      const typeFilterSql=[
+        ...(wantsClassroom?[`LOWER(COALESCE(type,'')) LIKE LOWER(?)`]:[]),
+        ...(wantsLaboratory?[`LOWER(COALESCE(type,'')) LIKE LOWER(?)`]:[])
+      ];
+      const typeFilterParams=[...(wantsClassroom?['%classroom%']:[]),...(wantsLaboratory?['%laboratory%']:[])];
+      facilities=await dbQuery(`SELECT id,name,building,building_code,capacity,type,status FROM facilities WHERE ${termFilterSql.join(' AND ')}${typeFilterSql.length?` AND ${typeFilterSql.join(' AND ')}`:''} ORDER BY building,name LIMIT 60`,[...termFilterParams,...typeFilterParams]);
+    }
+    if(wantsClassroom) facilities=facilities.filter(facility=>String(facility.type||'').toLowerCase().includes('classroom'));
+    if(wantsLaboratory) facilities=facilities.filter(facility=>String(facility.type||'').toLowerCase().includes('laboratory'));
+
+    // ORGROOM's campus timetable uses Philippine local dates and clock times.
+    // Derive these in Asia/Manila instead of relying on Aiven's server timezone.
+    const manilaParts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{
+      timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit',
+      weekday:'long',hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+    }).formatToParts(new Date()).map(part=>[part.type,part.value]));
+    const today=`${manilaParts.year}-${manilaParts.month}-${manilaParts.day}`;
+    const dayName=manilaParts.weekday;
+    const currentMinute=Number(manilaParts.hour)*60+Number(manilaParts.minute);
+    let weeklyRows=[],reservationRows=[];
+    const facilityIds=facilities.map(item=>Number(item.id)).filter(Number.isInteger);
+    if(facilityIds.length){
+      const placeholders=facilityIds.map(()=>'?').join(',');
+      weeklyRows=await dbQuery(`SELECT facility_id,start_time,end_time FROM weekly_room_schedules WHERE facility_id IN (${placeholders}) AND day_of_week=? AND is_active=1 AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' AND (term_start IS NULL OR term_start<=?) AND (term_end IS NULL OR term_end>=?)`,[...facilityIds,dayName,today,today]);
+      reservationRows=await dbQuery(`SELECT facility_id,room_name,building,status,time_slot FROM reservations WHERE reservation_date=? AND status IN ('PENDING','APPROVED') AND (facility_id IN (${placeholders}) OR facility_id IS NULL)`,[today,...facilityIds]);
+    }
+
+    const availabilityByFacility=new Map();
+    for(const facility of facilities){
+      const id=Number(facility.id);
+      const schedules=weeklyRows.filter(row=>Number(row.facility_id)===id);
+      const reservations=reservationRows.filter(row=>Number(row.facility_id)===id || (row.facility_id==null && String(row.room_name||'').toLowerCase()===String(facility.name||'').toLowerCase() && String(row.building||'').toLowerCase()===String(facility.building||'').toLowerCase()));
+      let availabilityStatus='UNKNOWN';
+      if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(String(facility.status||'AVAILABLE').toUpperCase())) availabilityStatus='UNAVAILABLE';
+      else if(Number.isFinite(currentMinute) && currentMinute>=OPERATING_START_MINUTES && currentMinute<OPERATING_END_MINUTES){
+        const segments=buildRoomAvailabilitySegments(schedules,reservations);
+        const segment=segments.find(item=>item.start<=currentMinute && currentMinute<item.end);
+        availabilityStatus=segment?.status||'UNKNOWN';
+      }else availabilityStatus='OUTSIDE_HOURS';
+      availabilityByFacility.set(id,availabilityStatus);
+    }
+
+    const roomMatches=(wantsAvailability && !roomTerm)?[]:facilities.slice(0,8);
+    const rooms=roomMatches.map(facility=>({
+      id:Number(facility.id),type:'room',title:facility.name,description:facility.building,
+      roomName:facility.name,building:facility.building,facilityType:facility.type,
+      capacity:facility.capacity==null?null:Number(facility.capacity),availabilityStatus:availabilityByFacility.get(Number(facility.id))||'UNKNOWN'
+    }));
+
+    let availableFacilities=[];
+    if(wantsAvailability){
+      availableFacilities=facilities.filter(facility=>availabilityByFacility.get(Number(facility.id))==='AVAILABLE').slice(0,8);
+    }
+    const availableRooms=availableFacilities.map(facility=>({
+      id:Number(facility.id),type:'available_room',title:facility.name,description:`${facility.building}${facility.capacity?` · ${facility.capacity} seats`:''}`,
+      roomName:facility.name,building:facility.building,facilityType:facility.type,capacity:facility.capacity==null?null:Number(facility.capacity),availabilityStatus:'AVAILABLE'
+    }));
+
+    // Instructor names are part of the school timetable already available to
+    // authenticated users. Searching them does not expose private user accounts.
+    const peopleLike=`%${query}%`;
+    const instructorRows=await dbQuery(`
+      SELECT w.id,w.instructor,w.course_code,w.course_title,w.activity_name,
+             w.day_of_week,TIME_FORMAT(w.start_time,'%h:%i %p') AS start_label,
+             TIME_FORMAT(w.end_time,'%h:%i %p') AS end_label,
+             f.id AS facility_id,f.name AS room_name,f.building
+      FROM weekly_room_schedules w
+      INNER JOIN facilities f ON f.id=w.facility_id
+      WHERE w.is_active=1
+        AND w.instructor IS NOT NULL AND TRIM(w.instructor)<>''
+        AND LOWER(w.instructor) LIKE LOWER(?)
+        AND HOUR(w.start_time)<24 AND HOUR(w.end_time)<24
+        AND w.end_time>w.start_time
+        AND UPPER(TRIM(w.activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY')
+        AND UPPER(TRIM(w.activity_name)) NOT LIKE 'APPROVED BY:%'
+        AND (w.term_start IS NULL OR w.term_start<=?)
+        AND (w.term_end IS NULL OR w.term_end>=?)
+      ORDER BY w.instructor,w.day_of_week,w.start_time,w.id
+      LIMIT 30
+    `,[peopleLike,today,today]);
+    const instructorPeople=[];
+    const seenInstructors=new Set();
+    for(const row of instructorRows){
+      const name=String(row.instructor||'').trim();
+      const key=name.toLowerCase();
+      if(!name||seenInstructors.has(key))continue;
+      seenInstructors.add(key);
+      const course=String(row.course_title||row.activity_name||'Class schedule');
+      instructorPeople.push({
+        id:`instructor-${Number(row.id)}`,
+        type:'person',
+        personKind:'instructor',
+        title:name,
+        description:`${course} · ${row.room_name} · ${row.building} · ${row.day_of_week} ${row.start_label}–${row.end_label}`,
+        role:'Instructor',
+        schedule:{
+          course,roomName:String(row.room_name||''),building:String(row.building||''),
+          dayOfWeek:String(row.day_of_week||''),startTime:String(row.start_label||''),
+          endTime:String(row.end_label||''),facilityId:Number(row.facility_id)
+        }
+      });
+      if(instructorPeople.length>=6)break;
+    }
+
+    let accountPeople=[];
+    let accountEmails=new Set();
+    if(isAdmin){
+      const rows=await dbQuery(`SELECT id,name,email,role,organization,department FROM users WHERE LOWER(name) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?) ORDER BY name,id LIMIT 6`,[peopleLike,peopleLike]);
+      accountEmails=new Set(rows.map(row=>String(row.email||'').trim().toLowerCase()).filter(Boolean));
+      accountPeople=rows.map(row=>({id:Number(row.id),type:'person',personKind:'account',title:String(row.name||'Unnamed user'),description:[row.organization,row.department].filter(Boolean).join(' · ')||'ORGROOM account',role:String(row.role||'').toUpperCase()}));
+    }else{
+      const rows=await dbQuery('SELECT id,name,role,organization,department FROM users WHERE id=? AND LOWER(name) LIKE LOWER(?) LIMIT 1',[user.id,peopleLike]);
+      accountPeople=rows.map(row=>({id:Number(row.id),type:'person',personKind:'account',title:String(row.name||'Your profile'),description:'Your ORGROOM profile',role:String(row.role||'').toUpperCase()}));
+    }
+
+    let reservationPeople=[];
+    if(isAdmin){
+      const requesterRows=await dbQuery(`
+        SELECT id,user_name,user_email,room_name,building
+        FROM reservations
+        WHERE LOWER(COALESCE(user_name,'')) LIKE LOWER(?)
+           OR LOWER(COALESCE(user_email,'')) LIKE LOWER(?)
+        ORDER BY id DESC
+        LIMIT 20
+      `,[peopleLike,peopleLike]);
+      const seenRequesters=new Set();
+      for(const row of requesterRows){
+        const email=String(row.user_email||'').trim().toLowerCase();
+        const name=String(row.user_name||'').trim();
+        const key=email||name.toLowerCase();
+        if(!name||!key||accountEmails.has(email)||seenRequesters.has(key))continue;
+        seenRequesters.add(key);
+        reservationPeople.push({
+          id:`requester-${Number(row.id)}`,
+          type:'person',
+          personKind:'requester',
+          title:name,
+          description:`Reservation requester · ${row.room_name||'Room'} · ${row.building||'Campus'}`,
+          role:'Requester'
+        });
+        if(reservationPeople.length>=4)break;
+      }
+    }
+    const people=[...accountPeople,...instructorPeople,...reservationPeople].slice(0,10);
+
+    const destinations=[
+      {tab:'home',title:'Dashboard',description:'Your ORGROOM overview',keywords:'home overview dashboard'},
+      {tab:'rooms',title:'Available Rooms',description:'Browse facilities and request a room',keywords:'available rooms currently available right now facilities classrooms laboratories'},
+      {tab:'calendar',title:'Room Calendar',description:'View room schedules and reservation activity',keywords:'calendar schedule timetable'},
+      {tab:'reservations',title:isAdmin?'Reservations':'My Reservations',description:'Track reservation requests and history',keywords:'reservations my reservations history bookings'},
+      ...(isAdmin?[{tab:'requests',title:'Admin Requests',description:'Review pending reservation requests',keywords:'admin requests approvals'},{tab:'room-usage',title:'Room Usage Check',description:'Review approved room usage',keywords:'room usage check'},{tab:'user-management',title:'User Management',description:'Manage Teacher and Admin accounts',keywords:'user management users accounts'}]:[]),
+      {tab:'profile',title:'Profile Settings',description:'Account details and preferences',keywords:'profile settings account'}
+    ];
+    const pageTerms=lowerQuery.split(/\s+/).filter(term=>!['in','the','for','and','please'].includes(term));
+    const pages=destinations.filter(item=>{const text=`${item.title} ${item.description} ${item.keywords}`.toLowerCase();return pageTerms.every(term=>text.includes(term));}).slice(0,6).map(item=>({...item,type:'page'}));
+    res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({query,rooms,availableRooms,people,pages,availabilityChecked:true,availabilityDate:today,availabilityMinute:Number.isFinite(currentMinute)?currentMinute:null});
+  }catch(error){
+    console.error(`ORGROOM global search failed: ${error.message||error}`);
+    res.status(error.status||500).json({message:'Search is temporarily unavailable. Please try again.'});
+  }
+});
 
 app.get('/api/room-schedule',async(req,res)=>{try{if(!await requireAuth(req,res))return;const facilityId=Number(req.query.facilityId);const date=String(req.query.date||'').trim();if(!Number.isInteger(facilityId)||facilityId<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date))return res.status(400).json({message:'A valid facility and date are required.'});res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const weeklyRows=await dbQuery(`SELECT * FROM weekly_room_schedules WHERE facility_id=? AND is_active=1 AND day_of_week=DAYNAME(?) AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' AND (term_start IS NULL OR term_start<=?) AND (term_end IS NULL OR term_end>=?) ORDER BY start_time`,[facilityId,date,date,date]);const reservationRows=await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.reservation_date=? AND r.status IN ('PENDING','APPROVED') AND (r.facility_id=? OR (r.facility_id IS NULL AND r.room_name=(SELECT name FROM facilities WHERE id=? LIMIT 1) AND r.building=(SELECT building FROM facilities WHERE id=? LIMIT 1))) ORDER BY r.time_slot,r.id`,[date,facilityId,facilityId,facilityId]);const segments=buildRoomAvailabilitySegments(weeklyRows,reservationRows);res.json({date,facilityId,operatingStart:OPERATING_START_MINUTES,operatingEnd:OPERATING_END_MINUTES,segments,weekly:weeklyRows.map(mapWeekly),reservations:reservationRows.map(mapReservation)});}catch(e){res.status(500).json({message:'Unable to load the room schedule.'})}});
 
