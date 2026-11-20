@@ -39,6 +39,14 @@ async function addColumnIfMissing(table, column, definition) {
 
 export async function ensureDatabase() {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_security_setup (
+      setup_key VARCHAR(80) PRIMARY KEY,
+      completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_by_user_id INT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS verification_codes (
       id INT PRIMARY KEY AUTO_INCREMENT,
       email VARCHAR(255) NOT NULL,
@@ -134,6 +142,51 @@ export async function ensureDatabase() {
       )
   `);
 
+  // Persistent Teacher-to-Admin messaging. All DDL is additive and repeatable.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_chat_conversations (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      teacher_user_id INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_chat_teacher (teacher_user_id),
+      INDEX idx_chat_conversation_updated (updated_at),
+      CONSTRAINT fk_chat_conversation_teacher
+        FOREIGN KEY (teacher_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_chat_messages (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      conversation_id BIGINT NOT NULL,
+      sender_user_id INT NULL,
+      message_text TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_chat_messages_conversation (conversation_id, id),
+      INDEX idx_chat_messages_sender (sender_user_id),
+      CONSTRAINT fk_chat_message_conversation
+        FOREIGN KEY (conversation_id) REFERENCES orgroom_chat_conversations(id) ON DELETE CASCADE,
+      CONSTRAINT fk_chat_message_sender
+        FOREIGN KEY (sender_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_chat_reads (
+      conversation_id BIGINT NOT NULL,
+      user_id INT NOT NULL,
+      last_read_message_id BIGINT NULL,
+      last_read_at DATETIME NULL,
+      PRIMARY KEY (conversation_id, user_id),
+      INDEX idx_chat_reads_user (user_id),
+      CONSTRAINT fk_chat_read_conversation
+        FOREIGN KEY (conversation_id) REFERENCES orgroom_chat_conversations(id) ON DELETE CASCADE,
+      CONSTRAINT fk_chat_read_user
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS room_usage_checks (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -184,6 +237,48 @@ export async function ensureDatabase() {
     'is_verified',
     'TINYINT(1) NOT NULL DEFAULT 1 AFTER position'
   );
+
+  await addColumnIfMissing(
+    'users',
+    'is_active',
+    'TINYINT(1) NOT NULL DEFAULT 1 AFTER is_verified'
+  );
+
+  // Ensure the role constraint permits SUPER_ADMIN. Older databases may use
+  // a different constraint name, so inspect every CHECK constraint on users.
+  const [userRoleChecks] = await pool.query(`
+    SELECT tc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+    FROM information_schema.TABLE_CONSTRAINTS tc
+    INNER JOIN information_schema.CHECK_CONSTRAINTS cc
+      ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+      AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+    WHERE tc.CONSTRAINT_SCHEMA = DATABASE()
+      AND tc.TABLE_NAME = 'users'
+      AND tc.CONSTRAINT_TYPE = 'CHECK'
+  `);
+  const roleChecks = userRoleChecks.filter(row =>
+    /\bROLE\b/i.test(String(row.CHECK_CLAUSE || ''))
+  );
+  const hasCompatibleRoleCheck = roleChecks.some(row =>
+    /SUPER_ADMIN/i.test(String(row.CHECK_CLAUSE || ''))
+  );
+
+  for (const row of roleChecks) {
+    if (!/SUPER_ADMIN/i.test(String(row.CHECK_CLAUSE || ''))) {
+      const constraintName = String(row.CONSTRAINT_NAME || '').replace(/`/g, '``');
+      if (constraintName) {
+        await pool.query(`ALTER TABLE users DROP CONSTRAINT \`${constraintName}\``);
+      }
+    }
+  }
+
+  if (!hasCompatibleRoleCheck) {
+    await pool.query(`
+      ALTER TABLE users
+      ADD CONSTRAINT chk_users_role
+      CHECK (role IN ('TEACHER','ADMIN','SUPER_ADMIN'))
+    `);
+  }
 
   await addColumnIfMissing(
     'reservations',

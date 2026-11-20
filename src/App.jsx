@@ -5,8 +5,10 @@ import {
   CheckCircle2, XCircle, CircleAlert, Plus, Trash2, Pencil, SlidersHorizontal,
   ClipboardList, GraduationCap, BarChart3, Sparkles, Mail, LockKeyhole, Eye,
   EyeOff, RefreshCw, CalendarCheck2, MapPin, Wifi, Monitor, Wind, Armchair,
-  Check, X, Send, ListChecks, Sun, Moon, ChevronDown, BellRing, Navigation, LocateFixed, Layers, RotateCcw, ArrowUp, ArrowDown, Footprints, Building, DoorClosed, Accessibility, Info, AlertTriangle
+  Check, X, Send, MessageSquare, ListChecks, Sun, Moon, ChevronDown, BellRing, Navigation, LocateFixed, Layers, RotateCcw, ArrowUp, ArrowDown, Footprints, Building, DoorClosed, Accessibility, Info, AlertTriangle
 } from 'lucide-react';
+import RoomImage from './RoomImage.jsx';
+import ChatWidget from './ChatWidget.jsx';
 import './styles.css';
 
 const API = import.meta.env.VITE_API_URL || '';
@@ -54,6 +56,10 @@ function initials(name='User'){
 function statusClass(status){
   return String(status||'').toLowerCase();
 }
+
+const hasAdminAccess = role => ['admin','super_admin'].includes(String(role||'').toLowerCase());
+const isSuperAdmin = role => String(role||'').toLowerCase()==='super_admin';
+const displayRole = role => isSuperAdmin(role)?'Super Admin':String(role||'').toLowerCase()==='admin'?'Admin':'Teacher';
 
 function parseTime(v){
   const m=String(v||'').match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
@@ -118,7 +124,6 @@ function Auth({onLogin}){
   const [step,setStep]=useState('form');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
-  const [position,setPosition]=useState('teacher');
   const [code,setCode]=useState('');
   const [newPassword,setNewPassword]=useState('');
   const [show,setShow]=useState(false);
@@ -126,464 +131,95 @@ function Auth({onLogin}){
   const [error,setError]=useState('');
   const [info,setInfo]=useState('');
   const [resendBusy,setResendBusy]=useState(false);
+  const submitLock=React.useRef(false);
 
-  const reset=()=>{
-    setStep('form');
-    setCode('');
-    setError('');
-    setInfo('');
-  };
+  const reset=()=>{setStep('form');setCode('');setError('');setInfo('');};
 
   const resendCode=async()=>{
-    setResendBusy(true);
-    setError('');
-    setInfo('');
+    setResendBusy(true);setError('');setInfo('');
     try{
-      const purpose=mode==='signup'?'signup':'login';
-      const r=await api('/api/auth/verification/resend',{method:'POST',body:JSON.stringify({email,purpose})});
+      const r=await api('/api/auth/verification/resend',{method:'POST',body:JSON.stringify({email,purpose:'login'})});
       setInfo(r.message);
     }catch(e){setError(e.message);}
     finally{setResendBusy(false);}
   };
 
   const submit=async()=>{
-    setBusy(true);
-    setError('');
-    setInfo('');
-
+    if(busy||submitLock.current)return;
+    submitLock.current=true;
+    setBusy(true);setError('');setInfo('');
     try{
       if(mode==='login'){
-
         if(step==='form'){
-          const r=await api('/api/auth/login/request-code',{
-            method:'POST',
-            body:JSON.stringify({email,password})
-          });
-          if(r.verified && r.user){
-            try{localStorage.setItem('orgroom-session',r.token||'');}catch{}
-            onLogin(r.user);
-            return;
-          }
-          setStep('code');
-          setInfo(r.message);
+          const r=await api('/api/auth/login/request-code',{method:'POST',body:JSON.stringify({email,password})});
+          if(r.verified&&r.user){try{localStorage.setItem('orgroom-session',r.token||'');}catch{}onLogin(r.user);return;}
+          setStep('code');setInfo(r.message);
         }else{
-          const r=await api('/api/auth/login/verify',{
-            method:'POST',
-            body:JSON.stringify({email,code})
-          });
+          const r=await api('/api/auth/login/verify',{method:'POST',body:JSON.stringify({email,code})});
           try{localStorage.setItem('orgroom-session',r.token||'');}catch{}
           onLogin(r.user);
         }
-
-      } else if(mode==='signup'){
-
-        if(step==='form'){
-
-          const r=await api('/api/auth/signup/request-code',{
-            method:'POST',
-            body:JSON.stringify({
-              email,
-              password,
-              position
-            })
-          });
-
-          if(r.alreadyExists){
-            setInfo(r.message);
-            setStep('form');
-          }else{
-            setStep('code');
-            setInfo(r.message);
-          }
-
-        } else {
-
-          const r=await api('/api/auth/signup/verify',{
-            method:'POST',
-            body:JSON.stringify({
-              email,
-              code
-            })
-          });
-
-          setMode('login');
-          setStep('form');
-          setPassword('');
-          setCode('');
-          setInfo('Account verified and created. Please sign in.');
-        }
-
-      } else {
-
-        if(step==='form'){
-
-          const r=await api('/api/auth/forgot-password/request-code',{
-            method:'POST',
-            body:JSON.stringify({
-              email
-            })
-          });
-
-          setStep('reset');
-          setInfo(r.message);
-
-        } else {
-
-          await api('/api/auth/forgot-password/reset',{
-            method:'POST',
-            body:JSON.stringify({
-              email,
-              code,
-              newPassword
-            })
-          });
-
-          setMode('login');
-          setStep('form');
-          setPassword('');
-          setNewPassword('');
-          setCode('');
-          setInfo('Password updated. You can sign in now.');
-        }
+      }else if(step==='form'){
+        const r=await api('/api/auth/forgot-password/request-code',{method:'POST',body:JSON.stringify({email})});
+        setStep('reset');setInfo(r.message);
+      }else{
+        await api('/api/auth/forgot-password/reset',{method:'POST',body:JSON.stringify({email,code,newPassword})});
+        setMode('login');setStep('form');setPassword('');setNewPassword('');setCode('');setInfo('Password updated. You can sign in now.');
       }
-
-    }catch(e){
-      setError(e.message);
-    }finally{
-      setBusy(false);
-    }
+    }catch(e){setError(e.message);}
+    finally{submitLock.current=false;setBusy(false);}
   };
 
-  const title=
-    step==='code' && (mode==='login'||mode==='signup')
-      ? 'Verify your email'
-      : mode==='login'
-        ? 'Welcome back'
-        : mode==='signup'
-          ? 'Create your account'
-          : 'Reset your password';
-
+  const title=mode==='login'&&step==='code'?'Verify your email':mode==='login'?'Welcome back':'Reset your password';
   return (
     <div className="auth-page">
-
       <div className="auth-art">
-
-        <div className="brand brand-lg">
-          <div className="brand-mark">
-            <DoorOpen/>
-          </div>
-
-          <div>
-            <b>ORGROOM</b>
-            <span>Campus space management</span>
-          </div>
-        </div>
-
+        <div className="brand brand-lg"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Campus space management</span></div></div>
         <div className="art-copy">
-
-          <span className="eyebrow">
-            CAMPUS OPERATIONS
-          </span>
-
-          <h1>
-            Find a room.
-            <br/>
-            <em>Make it happen.</em>
-          </h1>
-
-          <p>
-            One clean workspace for room availability,
-            reservations, schedules, and approvals.
-          </p>
-
-          <div className="art-stats">
-
-            <div>
-              <strong>24/7</strong>
-              <span>Availability view</span>
-            </div>
-
-            <div>
-              <strong>1</strong>
-              <span>Campus workspace</span>
-            </div>
-
-            <div>
-              <strong>2</strong>
-              <span>User roles</span>
-            </div>
-
-          </div>
-
+          <span className="eyebrow">CAMPUS OPERATIONS</span>
+          <h1>Find a room.<br/><em>Make it happen.</em></h1>
+          <p>One clean workspace for room availability, reservations, schedules, and approvals.</p>
+          <div className="art-stats"><div><strong>24/7</strong><span>Availability view</span></div><div><strong>1</strong><span>Campus workspace</span></div><div><strong>3</strong><span>Access levels</span></div></div>
         </div>
       </div>
-
-
       <div className="auth-card">
-
-        <div className="mobile-brand brand">
-
-          <div className="brand-mark">
-            <DoorOpen/>
-          </div>
-
-          <div>
-            <b>ORGROOM</b>
-            <span>Campus space management</span>
-          </div>
-
-        </div>
-
-
+        <div className="mobile-brand brand"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Campus space management</span></div></div>
         <div className="auth-head">
-
-          <span className="eyebrow">
-            SECURE ACCESS
-          </span>
-
-          <h2>
-            {title}
-          </h2>
-
-          <p>
-            {
-              step==='code' && (mode==='login'||mode==='signup')
-                ? 'We sent a verification code to your email address. Enter it below to continue.'
-                : mode==='login'
-                  ? 'Sign in to manage your campus space.'
-                  : mode==='signup'
-                    ? 'Use your approved campus email to register.'
-                    : 'We will verify your email before changing the password.'
-            }
-          </p>
-
+          <span className="eyebrow">SECURE ACCESS</span>
+          <h2>{title}</h2>
+          <p>{mode==='login'&&step==='code'?'We sent a verification code to your email address. Enter it below to continue.':mode==='login'?'Sign in to manage your campus space.':'We will verify your email before changing the password.'}</p>
         </div>
-
-
-        {error && (
-          <div className="alert danger">
-            <CircleAlert/>
-            {error}
-          </div>
-        )}
-
-
-        {info && (
-          <div className="alert success">
-            <CheckCircle2/>
-            {info}
-          </div>
-        )}
-
-
-        {step==='form' && mode!=='forgot' && (
+        <form className="auth-action-form" onSubmit={e=>{e.preventDefault();if(!busy)submit();}}>
+        {error&&<div className="alert danger"><CircleAlert/>{error}</div>}
+        {info&&<div className="alert success"><CheckCircle2/>{info}</div>}
+        {mode==='login'&&step==='form'&&(
           <div className="form-stack">
-
-            <label>
-              Email
-
-              <input
-                value={email}
-                onChange={e=>setEmail(e.target.value)}
-                placeholder="you@gmail.com"
-                type="email"
-              />
-            </label>
-
-
-            <label>
-              Password
-
-              <div className="input-icon">
-
-                <LockKeyhole/>
-
-                <input
-                  value={password}
-                  onChange={e=>setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  type={show?'text':'password'}
-                />
-
-                <button
-                  type="button"
-                  onClick={()=>setShow(!show)}
-                >
-                  {show ? <EyeOff/> : <Eye/>}
-                </button>
-
-              </div>
-            </label>
-
-
-            {mode==='signup' && (
-              <label>
-                Position
-
-                <select
-                  value={position}
-                  onChange={e=>setPosition(e.target.value)}
-                >
-                  <option value="teacher">Teacher</option>
-
-                </select>
-              </label>
-            )}
-
-
-            {mode==='login' && (
-              <button
-                className="link-button"
-                onClick={()=>{
-                  setMode('forgot');
-                  reset();
-                }}
-              >
-                Forgot password?
-              </button>
-            )}
-
+            <label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@gmail.com" type="email" autoComplete="username" required/></label>
+            <label>Password<div className="input-icon"><LockKeyhole/><input value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" type={show?'text':'password'} autoComplete="current-password" required/><button type="button" onClick={()=>setShow(!show)}>{show?<EyeOff/>:<Eye/>}</button></div></label>
+            <button type="button" className="link-button" onClick={()=>{setMode('forgot');reset();}}>Forgot password?</button>
           </div>
         )}
-
-
-        {mode==='forgot' && step==='form' && (
+        {mode==='forgot'&&step==='form'&&<div className="form-stack"><label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@gmail.com" type="email"/></label></div>}
+        {mode==='login'&&step==='code'&&(
           <div className="form-stack">
-
-            <label>
-              Email
-
-              <input
-                value={email}
-                onChange={e=>setEmail(e.target.value)}
-                placeholder="you@gmail.com"
-                type="email"
-              />
-            </label>
-
+            <label>Verification code<input className="code-input" value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" maxLength={6}/></label>
+            <small>We sent a 6-digit code to <strong>{email}</strong>. It expires in 10 minutes.</small>
+            <button type="button" className="auth-link-button" disabled={resendBusy} onClick={resendCode}>{resendBusy?'Sending…':'Resend Code'}</button>
           </div>
         )}
-
-
-        {((mode==='login'&&step==='code')||(mode==='signup'&&step==='code')) && (
+        {mode==='forgot'&&step==='reset'&&(
           <div className="form-stack">
-
-            <label>
-              Verification code
-
-              <input
-                className="code-input"
-                value={code}
-                onChange={e=>setCode(e.target.value)}
-                placeholder="000000"
-                maxLength={6}
-              />
-            </label>
-
-            <small>
-              We sent a 6-digit code to <strong>{email}</strong>. It expires in 10 minutes.
-            </small>
-
-            {(mode==='login'||mode==='signup') && (
-              <button type="button" className="auth-link-button" disabled={resendBusy} onClick={resendCode}>
-                {resendBusy ? 'Sending…' : 'Resend Code'}
-              </button>
-            )}
-
+            <label>Verification code<input className="code-input" value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" maxLength={6}/></label>
+            <label>New password<input value={newPassword} onChange={e=>setNewPassword(e.target.value)} type="password" placeholder="At least 8 characters" autoComplete="new-password"/></label>
           </div>
         )}
-
-
-        {mode==='forgot' && step==='reset' && (
-          <div className="form-stack">
-
-            <label>
-              Verification code
-
-              <input
-                className="code-input"
-                value={code}
-                onChange={e=>setCode(e.target.value)}
-                placeholder="000000"
-                maxLength={6}
-              />
-            </label>
-
-            <label>
-              New password
-
-              <input
-                value={newPassword}
-                onChange={e=>setNewPassword(e.target.value)}
-                type="password"
-                placeholder="At least 8 characters"
-              />
-            </label>
-
-          </div>
-        )}
-
-
-        <button
-          className="primary-btn auth-submit"
-          disabled={busy}
-          onClick={submit}
-        >
-          {
-            busy
-              ? 'Please wait…'
-              : mode==='login'
-                ? (step==='code'?'Verify & Sign in':'Sign in')
-                : mode==='signup'
-                  ? (step==='code'?'Verify account':'Create account')
-                  : (step==='reset'?'Reset password':'Send code')
-          }
-
-          <ChevronRight/>
-        </button>
-
-
-        <div className="auth-switch">
-
-          {
-            mode==='login'
-              ? (
-                <>
-                  No account?
-
-                  <button
-                    onClick={()=>{
-                      setMode('signup');
-                      reset();
-                    }}
-                  >
-                    Create one
-                  </button>
-                </>
-              )
-              : (
-                <>
-                  Back to
-
-                  <button
-                    onClick={()=>{
-                      setMode('login');
-                      reset();
-                    }}
-                  >
-                    Sign in
-                  </button>
-                </>
-              )
-          }
-
-        </div>
-
+        <button type="submit" className="primary-btn auth-submit" disabled={busy}>{busy?'Please wait…':mode==='login'?(step==='code'?'Verify & Sign in':'Sign in'):(step==='reset'?'Reset password':'Send code')}<ChevronRight/></button>
+        </form>
+        <div className="auth-switch">{mode==='login'?<span>Accounts are created by authorized ORGROOM administrators.</span>:<>Back to <button type="button" onClick={()=>{setMode('login');reset();}}>Sign in</button></>}</div>
       </div>
     </div>
   );
 }
-
 
 /* ============================================================
    REUSABLE CONFIRMATION DIALOG
@@ -636,7 +272,7 @@ function Sidebar({
 }){
 
   const items =
-    user.role==='admin'
+    hasAdminAccess(user.role)
       ? [
           ['home','Overview',LayoutDashboard],
           ['calendar','Calendar',CalendarDays],
@@ -735,7 +371,7 @@ function Sidebar({
         <div className="side-user">
           <b>{user.name}</b>
           <span>
-            {user.role} · {user.org}
+            {displayRole(user.role)} · {user.org}
           </span>
         </div>
 
@@ -768,7 +404,7 @@ function Sidebar({
    ============================================================ */
 
 function MobileBottomNav({tab,setTab,user}){
-  const items = user.role==='admin'
+  const items = hasAdminAccess(user.role)
     ? [
         ['home','Home',LayoutDashboard],
         ['requests','Requests',ShieldCheck],
@@ -861,7 +497,7 @@ function AdminSidebar({
 
         <div className="admin-role-badge">
           <ShieldCheck/>
-          <span>Administrator</span>
+          <span>{isSuperAdmin(user.role)?'Super Administrator':'Administrator'}</span>
         </div>
       </div>
 
@@ -969,7 +605,21 @@ function SearchResultRow({item,query,onSelect,active=false}){
       onMouseDown={event=>event.preventDefault()}
       onClick={()=>onSelect(item)}
     >
-      <span className={`global-search-result-icon ${item.type==='available_room'?'available':''}`}><SearchResultIcon item={item}/></span>
+      {(item.type==='room'||item.type==='available_room') ? (
+        <RoomImage
+          room={{
+            id:item.id,
+            name:item.roomName||item.title,
+            building:item.building,
+            type:item.facilityType
+          }}
+          className="global-search-room-image"
+        />
+      ) : (
+        <span className={`global-search-result-icon ${item.type==='available_room'?'available':''}`}>
+          <SearchResultIcon item={item}/>
+        </span>
+      )}
       <span className="global-search-result-copy">
         <b><HighlightMatch value={item.title} query={query}/></b>
         {item.description && <small><HighlightMatch value={item.description} query={query}/></small>}
@@ -1146,7 +796,7 @@ function Topbar({
 }){
 
   return (
-    <header className={`topbar ${user.role==='admin' ? 'admin-topbar' : ''}`}>
+    <header className={`topbar ${hasAdminAccess(user.role) ? 'admin-topbar' : ''}`}>
 
       <button
         className="menu-btn"
@@ -1213,7 +863,7 @@ function Topbar({
 
           <div>
             <b>{user.name}</b>
-            <span>{user.role}</span>
+            <span>{displayRole(user.role)}</span>
           </div>
 
         </div>
@@ -1231,7 +881,9 @@ function Topbar({
 
 function NotificationCenter({notifications=[],unreadCount=0,onClose}){
   const navigate=async(notification)=>{
-    try{ await api(`/api/notifications/${notification.id}/read`,{method:'POST'}); }catch{}
+    if(notification.type!=='CHAT_MESSAGE'){
+      try{ await api(`/api/notifications/${notification.id}/read`,{method:'POST'}); }catch{}
+    }
     if(typeof onClose==='function') onClose(notification);
   };
 
@@ -1247,16 +899,17 @@ function NotificationCenter({notifications=[],unreadCount=0,onClose}){
       </div>
       <div className="notification-list">
         {!notifications.length ? (
-          <div className="notification-empty"><BellRing/><b>No new notifications</b><span>Important reservation activity will appear here.</span></div>
+          <div className="notification-empty"><BellRing/><b>No new notifications</b><span>Reservation and message activity will appear here.</span></div>
         ) : notifications.map(item=>(
           <button key={item.id} className={`notification-item ${item.isRead?'read':'unread'}`} onClick={()=>navigate(item)}>
             <span className={`notification-item-icon ${String(item.type||'').toLowerCase()}`}>
-              {item.type==='RESERVATION_APPROVED'?<CheckCircle2/>:item.type==='RESERVATION_REJECTED'?<XCircle/>:item.type==='RESERVATION_CANCELLED'?<X/>:item.type==='RESERVATION_ENDING_5_MINUTES'?<AlertTriangle/>:item.type==='RESERVATION_ENDED'?<BellRing/>:<BellRing/>}
+              {item.type==='RESERVATION_APPROVED'?<CheckCircle2/>:item.type==='RESERVATION_REJECTED'?<XCircle/>:item.type==='RESERVATION_CANCELLED'?<X/>:item.type==='RESERVATION_ENDING_5_MINUTES'?<AlertTriangle/>:item.type==='RESERVATION_ENDED'?<BellRing/>:item.type==='CHAT_MESSAGE'?<MessageSquare/>:<BellRing/>}
             </span>
             <span className="notification-item-copy">
               <span className="notification-item-title"><b>{item.title}</b>{!item.isRead&&<i/>}</span>
               <span>{item.message}</span>
               {(item.building||item.roomName) && <small>{item.building}{item.roomName?` · ${item.roomName}`:''}{item.date?` · ${prettyDate(item.date)}`:''}{item.timeSlot?` · ${item.timeSlot}`:''}</small>}
+              {item.type==='CHAT_MESSAGE'&&<small>Open Teacher conversation</small>}
               <time>{notificationRelativeTime(item.createdAt)}</time>
             </span>
           </button>
@@ -1335,7 +988,7 @@ function Overview({
 }){
 
   const mine =
-    user.role==='admin'
+    hasAdminAccess(user.role)
       ? reservations
       : reservations.filter(
           r=>r.userEmail===user.email
@@ -1369,7 +1022,7 @@ function Overview({
 
           <h2>
             {
-              user.role==='admin'
+              hasAdminAccess(user.role)
                 ? 'Operations overview'
                 : `Hello, ${user.name.split(' ')[0]}.`
             }
@@ -1377,7 +1030,7 @@ function Overview({
 
           <p>
             {
-              user.role==='admin'
+              hasAdminAccess(user.role)
                 ? 'Monitor room demand and keep campus requests moving.'
                 : 'Everything you need to find a space and keep track of your requests.'
             }
@@ -1410,7 +1063,7 @@ function Overview({
         <Stat
           icon={ClipboardList}
           label={
-            user.role==='admin'
+            hasAdminAccess(user.role)
               ? 'All requests'
               : 'My requests'
           }
@@ -1451,7 +1104,7 @@ function Overview({
             <div>
               <h3>
                 {
-                  user.role==='admin'
+                  hasAdminAccess(user.role)
                     ? 'Recent requests'
                     : 'My recent requests'
                 }
@@ -1466,7 +1119,7 @@ function Overview({
               className="text-btn"
               onClick={()=>
                 setTab(
-                  user.role==='admin'
+                  hasAdminAccess(user.role)
                     ? 'requests'
                     : 'reservations'
                 )
@@ -1574,7 +1227,7 @@ function Overview({
       </div>
 
 
-      {user.role==='admin' && (
+      {hasAdminAccess(user.role) && (
         <section className="panel">
 
           <div className="panel-head">
@@ -1928,12 +1581,10 @@ function normalizeRoomName(name='', building=''){
 }
 
 function roomDisplayData(room){
-  const building=normalizeBuildingName(room.building,room.name);
-  const name=normalizeRoomName(room.name,room.building);
   return {
     ...room,
-    _displayBuilding:building,
-    _displayName:name
+    _displayBuilding:room.building,
+    _displayName:room.name
   };
 }
 
@@ -2016,9 +1667,8 @@ function Rooms({
   focusRoomId=null,
   focusRoomKey=0
 }){
-
   const [q,setQ]=useState('');
-  const [building,setBuilding]=useState('ALL');
+  const [selectedBuilding,setSelectedBuilding]=useState('');
   const [type,setType]=useState('ALL');
   const [liveTick,setLiveTick]=useState(Date.now());
   const appliedFocusKey=React.useRef(0);
@@ -2028,201 +1678,348 @@ function Rooms({
     const match=rooms.find(room=>Number(room.id)===Number(focusRoomId));
     if(!match)return;
     appliedFocusKey.current=focusRoomKey;
-    const display=roomDisplayData(match);
-    setQ(display._displayName);
-    setBuilding(display._displayBuilding);
+    setSelectedBuilding(String(match.building||''));
+    setQ(String(match.name||''));
     setType('ALL');
   },[focusRoomId,focusRoomKey,rooms]);
 
-
-  // Keep the recommendation display synchronized with the current clock.
-  useEffect(()=>{const t=setInterval(()=>setLiveTick(Date.now()),10000);return()=>clearInterval(t);},[]);
+  useEffect(()=>{
+    const timer=setInterval(()=>setLiveTick(Date.now()),10000);
+    return ()=>clearInterval(timer);
+  },[]);
 
   const now=new Date(liveTick);
   const todayISO=localTodayISO();
 
-  const displayRooms=rooms
+  // Use the actual facility records returned by the existing API.
+  // Keep database room names, building names, and IDs unchanged.
+  const displayRooms=(rooms||[])
     .filter(room=>!isBuildingOnlyFacility(room))
-    .map(room=>({...roomDisplayData(room),status:availabilityForRoom(room,{weekly,reservations,calendarIndicators:false}).status}));
+    .map(room=>({
+      ...room,
+      _displayName:room.name,
+      _displayBuilding:room.building,
+      status:availabilityForRoom(room,{weekly,reservations,calendarIndicators:false}).status
+    }));
 
-  const buildings=[
-    ...new Set(
-      displayRooms.map(r=>r._displayBuilding)
-    )
-  ].sort(buildingSort);
+  // Buildings are derived from existing facility records.
+  // A building-only record can identify a building without creating a room card.
+  const buildings=[...new Set((rooms||[]).map(room=>{
+    const building=String(room.building||'');
+    const name=String(room.name||'');
+    return building || (isBuildingOnlyFacility(room)?name:'');
+  }).filter(Boolean))].sort(buildingSort);
 
-  const types=[
-    ...new Set(
-      displayRooms.map(r=>r.type)
-    )
-  ].sort((a,b)=>String(a||'').localeCompare(String(b||'')));
+  const parseLiveMinutes=value=>{
+    const match=String(value||'').trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+    if(!match)return NaN;
 
-  const filtered=displayRooms.filter(r=>
-    (building==='ALL'||r._displayBuilding===building) &&
-    (type==='ALL'||r.type===type) &&
-    `${r._displayName} ${r._displayBuilding} ${r.type}`
+    let hour=Number(match[1]);
+    const minute=Number(match[2]);
+
+    if(minute>59)return NaN;
+
+    if(match[3]){
+      const period=match[3].toUpperCase();
+
+      if(hour<1||hour>12)return NaN;
+      if(period==='PM'&&hour!==12)hour+=12;
+      if(period==='AM'&&hour===12)hour=0;
+    }
+
+    return hour*60+minute;
+  };
+
+  const currentMinute=now.getHours()*60+now.getMinutes();
+  const currentDay=now.toLocaleDateString('en-US',{weekday:'long'});
+
+  const isAvailableNow=room=>{
+    const facilityStatus=String(room.status||'AVAILABLE').toUpperCase();
+
+    if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(facilityStatus))
+      return false;
+
+    const scheduled=(weekly||[]).some(item=>
+      Number(item.facilityId)===Number(room.id) &&
+      item.dayOfWeek===currentDay &&
+      (!item.termStart||todayISO>=item.termStart) &&
+      (!item.termEnd||todayISO<=item.termEnd) &&
+      (()=>{
+        const start=parseLiveMinutes(item.startTime);
+        const end=parseLiveMinutes(item.endTime);
+
+        return Number.isFinite(start)&&Number.isFinite(end)&&start<=currentMinute&&currentMinute<end;
+      })()
+    );
+
+    if(scheduled)return false;
+
+    const occupied=(reservations||[]).some(item=>
+      item.date===todayISO &&
+      (item.status==='APPROVED'||item.status==='PENDING') &&
+      (
+        (item.facilityId&&Number(item.facilityId)===Number(room.id)) ||
+        (
+          !item.facilityId &&
+          String(item.roomName).toLowerCase()===String(room.name).toLowerCase() &&
+          String(item.building).toLowerCase()===String(room.building).toLowerCase()
+        )
+      ) &&
+      (()=>{
+        const parts=String(item.timeSlot||'').split(/\s*(?:-|–|—|to)\s*/i);
+        const start=parseLiveMinutes(parts[0]);
+        const end=parseLiveMinutes(parts[1]);
+
+        return Number.isFinite(start)&&Number.isFinite(end)&&start<=currentMinute&&currentMinute<end;
+      })()
+    );
+
+    return !occupied;
+  };
+
+  const buildingRooms=selectedBuilding
+    ? displayRooms.filter(room=>String(room.building||'')===selectedBuilding)
+    : [];
+
+  const types=[...new Set(buildingRooms.map(room=>room.type).filter(Boolean))]
+    .sort((a,b)=>String(a).localeCompare(String(b)));
+
+  const filteredRooms=buildingRooms.filter(room=>
+    (type==='ALL'||room.type===type) &&
+    `${room.name||''} ${room.building||''} ${room.type||''} ${room.description||''}`
       .toLowerCase()
       .includes(q.toLowerCase())
   );
 
-  useEffect(()=>{
-    if(!focusRoomId)return;
-    const frame=window.requestAnimationFrame(()=>{
-      window.requestAnimationFrame(()=>document.getElementById(`orgroom-room-${focusRoomId}`)?.scrollIntoView({behavior:'smooth',block:'center'}));
-    });
-    return ()=>window.cancelAnimationFrame(frame);
-  },[focusRoomId,q,building,filtered.length]);
+  const visibleBuildings=buildings.filter(buildingName=>
+    !q ||
+    buildingName.toLowerCase().includes(q.toLowerCase()) ||
+    displayRooms.some(room=>
+      String(room.building||'')===buildingName &&
+      `${room.name||''} ${room.type||''}`.toLowerCase().includes(q.toLowerCase())
+    )
+  );
 
-  const grouped=groupRoomsByBuilding(filtered);
-
-  const parseLiveMinutes=value=>{
-    const m=String(value||'').trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
-    if(!m)return NaN;
-    let h=Number(m[1]), min=Number(m[2]);
-    if(min>59)return NaN;
-    if(m[3]){const ap=m[3].toUpperCase();if(h<1||h>12)return NaN;if(ap==='PM'&&h!==12)h+=12;if(ap==='AM'&&h===12)h=0;}
-    return h*60+min;
-  };
-  const currentMinute=now.getHours()*60+now.getMinutes();
-  const currentDay=now.toLocaleDateString('en-US',{weekday:'long'});
-  const isAvailableNow=room=>{
-    const facilityStatus=String(room.status||'AVAILABLE').toUpperCase();
-    if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(facilityStatus))return false;
-    const scheduled=(weekly||[]).some(x=>Number(x.facilityId)===Number(room.id)&&x.dayOfWeek===currentDay&&(!x.termStart||todayISO>=x.termStart)&&(!x.termEnd||todayISO<=x.termEnd)&&(()=>{const a=parseLiveMinutes(x.startTime),b=parseLiveMinutes(x.endTime);return Number.isFinite(a)&&Number.isFinite(b)&&a<=currentMinute&&currentMinute<b;})());
-    if(scheduled)return false;
-    const occupied=(reservations||[]).some(x=>x.date===todayISO&&(x.status==='APPROVED'||x.status==='PENDING')&&((x.facilityId&&Number(x.facilityId)===Number(room.id))||(!x.facilityId&&String(x.roomName).toLowerCase()===String(room.name).toLowerCase()&&String(x.building).toLowerCase()===String(room.building).toLowerCase()))&&(()=>{const parts=String(x.timeSlot||'').split(/\s*(?:-|–|—|to)\s*/i),a=parseLiveMinutes(parts[0]),b=parseLiveMinutes(parts[1]);return Number.isFinite(a)&&Number.isFinite(b)&&a<=currentMinute&&currentMinute<b;})());
-    return !occupied;
-  };
-  const liveRooms=displayRooms.filter(isAvailableNow)
-    .sort((a,b)=>String(a._displayBuilding).localeCompare(String(b._displayBuilding))||naturalRoomSort(a,b))
+  const liveRooms=buildingRooms.filter(isAvailableNow)
+    .sort((a,b)=>String(a.name||'').localeCompare(
+      String(b.name||''),
+      undefined,
+      {numeric:true,sensitivity:'base'}
+    ))
     .slice(0,6);
 
+  useEffect(()=>{
+    if(!focusRoomId||!selectedBuilding)return;
+
+    const frame=window.requestAnimationFrame(()=>{
+      window.requestAnimationFrame(()=>{
+        document.getElementById(`orgroom-room-${focusRoomId}`)
+          ?.scrollIntoView({behavior:'smooth',block:'center'});
+      });
+    });
+
+    return ()=>window.cancelAnimationFrame(frame);
+  },[focusRoomId,q,selectedBuilding,filteredRooms.length]);
+
+  const selectBuilding=buildingName=>{
+    setSelectedBuilding(buildingName);
+    setQ('');
+    setType('ALL');
+  };
+
   return (
-    <div className="page">
+    <div className="page room-browser-page">
 
       <div className="page-heading">
-
         <div>
-          <span className="eyebrow">
-            FACILITIES
-          </span>
-
-          <h2>
-            Available Rooms
-          </h2>
-
+          <span className="eyebrow">FACILITIES</span>
+          <h2>Available Rooms</h2>
           <p>
-            See which rooms are available right now, then browse by building or facility type.
+            {selectedBuilding
+              ? 'Choose an actual room registered under this building.'
+              : 'Select a campus building to view its registered rooms.'}
           </p>
         </div>
 
         <div className="result-count">
-          {filtered.length} rooms
+          {selectedBuilding
+            ? `${filteredRooms.length} rooms`
+            : `${visibleBuildings.length} buildings`}
         </div>
-
       </div>
 
-
-      <section className="available-now-panel">
-        <div className="available-now-head">
-          <div>
-            <span className="eyebrow">LIVE AVAILABILITY</span>
-            <h3>Available right now</h3>
-            <p>Recommended rooms are based on the current time, today's schedules, and active pending/approved reservations.</p>
+      {!selectedBuilding ? (
+        <>
+          <div className="room-browser-toolbar">
+            <div className="search-box">
+              <Search/>
+              <input
+                value={q}
+                onChange={event=>setQ(event.target.value)}
+                placeholder="Search buildings or registered rooms…"
+                aria-label="Search buildings or rooms"
+              />
+            </div>
           </div>
-          <span className="live-indicator"><i/> Live</span>
-        </div>
-        {liveRooms.length ? (
-          <div className="available-now-grid">
-            {liveRooms.map(room=>(
-              <button className="available-now-card" key={room.id} onClick={()=>onBook(room)}>
-                <span className="available-now-icon"><DoorOpen/></span>
-                <span className="available-now-main"><b>{room._displayName}</b><small>{room._displayBuilding}{room.capacity ? ` · ${room.capacity} seats` : ''}</small></span>
-                <span className="available-now-status">Available</span>
-                <ChevronRight/>
-              </button>
-            ))}
+
+          {visibleBuildings.length ? (
+            <div className="building-picker-grid">
+              {visibleBuildings.map(buildingName=>{
+                const count=displayRooms.filter(
+                  room=>String(room.building||'')===buildingName
+                ).length;
+
+                const available=displayRooms.filter(
+                  room=>String(room.building||'')===buildingName&&isAvailableNow(room)
+                ).length;
+
+                return (
+                  <button
+                    type="button"
+                    className="building-picker-card"
+                    key={buildingName}
+                    onClick={()=>selectBuilding(buildingName)}
+                  >
+                    <span className="building-picker-icon">
+                      <Building2/>
+                    </span>
+
+                    <span className="building-picker-copy">
+                      <strong>{buildingName}</strong>
+                      <small>
+                        {count} registered {count===1?'room':'rooms'}
+                      </small>
+                    </span>
+
+                    <span className="building-picker-availability">
+                      {available} available now
+                    </span>
+
+                    <ChevronRight/>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <Empty
+              icon={Building2}
+              text="No buildings are registered in the facility records."
+            />
+          )}
+        </>
+      ) : (
+        <>
+          <div className="room-browser-toolbar room-browser-toolbar-selected">
+
+            <button
+              type="button"
+              className="room-back-button"
+              onClick={()=>{
+                setSelectedBuilding('');
+                setQ('');
+                setType('ALL');
+              }}
+            >
+              <ChevronLeft/>
+              All buildings
+            </button>
+
+            <div className="search-box">
+              <Search/>
+              <input
+                value={q}
+                onChange={event=>setQ(event.target.value)}
+                placeholder={`Search rooms in ${selectedBuilding}…`}
+                aria-label={`Search rooms in ${selectedBuilding}`}
+              />
+            </div>
+
+            {types.length>0&&(
+              <select
+                value={type}
+                onChange={event=>setType(event.target.value)}
+                aria-label="Filter by room type"
+              >
+                <option value="ALL">All room types</option>
+                {types.map(roomType=>(
+                  <option key={roomType} value={roomType}>
+                    {roomType}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
-        ) : (
-          <div className="available-now-empty"><CircleAlert/><span><b>No room is available right now.</b><small>Check again shortly or use the calendar to find the next available time.</small></span></div>
-        )}
-      </section>
 
+          <div className="selected-building-banner">
+            <span className="building-picker-icon">
+              <Building2/>
+            </span>
 
-      <div className="filters">
+            <div>
+              <span className="eyebrow">SELECTED BUILDING</span>
+              <h3>{selectedBuilding}</h3>
+              <p>
+                {buildingRooms.length} registered {buildingRooms.length===1?'room':'rooms'} in this building
+              </p>
+            </div>
+          </div>
 
-        <div className="search-box">
-          <Search/>
-
-          <input
-            value={q}
-            onChange={e=>setQ(e.target.value)}
-            placeholder="Search rooms, buildings, facilities…"
-          />
-        </div>
-
-
-        <select
-          value={building}
-          onChange={e=>setBuilding(e.target.value)}
-        >
-          <option value="ALL">
-            All buildings
-          </option>
-
-          {buildings.map(x=>(
-            <option key={x} value={x}>
-              {x}
-            </option>
-          ))}
-
-        </select>
-
-
-        <select
-          value={type}
-          onChange={e=>setType(e.target.value)}
-        >
-          <option value="ALL">
-            All types
-          </option>
-
-          {types.map(x=>(
-            <option key={x} value={x}>
-              {x}
-            </option>
-          ))}
-
-        </select>
-
-      </div>
-
-
-      <div className="building-groups">
-
-        {grouped.map(([buildingName,buildingRooms])=>(
-          <section
-            className="building-room-section"
-            key={buildingName}
-          >
-
-            <div className="building-room-heading">
+          <section className="available-now-panel">
+            <div className="available-now-head">
               <div>
-                <span className="eyebrow">
-                  BUILDING
-                </span>
-                <h3>
-                  {buildingName}
-                </h3>
+                <span className="eyebrow">LIVE AVAILABILITY</span>
+                <h3>Available right now</h3>
+                <p>
+                  Availability is calculated from the current room status,
+                  recurring schedules, and active pending or approved reservations.
+                </p>
               </div>
 
-              <span className="building-room-count">
-                {buildingRooms.length} {buildingRooms.length===1 ? 'room' : 'rooms'}
+              <span className="live-indicator">
+                <i/> Live
               </span>
             </div>
 
-            <div className="room-grid">
-              {buildingRooms.map(room=>(
+            {liveRooms.length ? (
+              <div className="available-now-grid">
+                {liveRooms.map(room=>(
+                  <button
+                    type="button"
+                    className="available-now-card"
+                    key={room.id}
+                    onClick={()=>onBook(room)}
+                  >
+                    <RoomImage room={room} className="available-now-photo"/>
+
+                    <span className="available-now-main">
+                      <b>{room.name}</b>
+                      <small>
+                        {room.building}
+                        {room.capacity!=null?` · ${room.capacity} seats`:''}
+                      </small>
+                    </span>
+
+                    <span className="available-now-status">Available</span>
+                    <ChevronRight/>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="available-now-empty">
+                <CircleAlert/>
+                <span>
+                  <b>No room is available right now.</b>
+                  <small>
+                    Check the room list or use the calendar to find another time.
+                  </small>
+                </span>
+              </div>
+            )}
+          </section>
+
+          {filteredRooms.length ? (
+            <div className="room-grid room-grid-with-images">
+              {filteredRooms.map(room=>(
                 <RoomCard
                   key={room.id}
                   room={room}
@@ -2231,20 +2028,18 @@ function Rooms({
                 />
               ))}
             </div>
-
-          </section>
-        ))}
-
-      </div>
-
-
-      {!filtered.length && (
-        <Empty
-          icon={Search}
-          text="No rooms match your filters."
-        />
+          ) : (
+            <Empty
+              icon={Search}
+              text={
+                buildingRooms.length
+                  ? 'No registered rooms match your search or filter.'
+                  : 'No rooms are registered under this building yet.'
+              }
+            />
+          )}
+        </>
       )}
-
     </div>
   );
 }
@@ -2254,90 +2049,61 @@ function Rooms({
    ROOM CARD
    ============================================================ */
 
-function RoomCard({
-  room,
-  onBook,
-  focused=false
-}){
+function RoomCard({room,onBook,focused=false}){
+  const unavailable=room.status==='OCCUPIED'||room.status==='UNAVAILABLE';
 
   return (
-    <article id={room.id!=null?`orgroom-room-${room.id}`:undefined} className={`room-card ${focused?'global-search-room-focused':''}`}>
-
-      <div className="room-top">
-
-        <div className="room-symbol">
-          <DoorOpen/>
-        </div>
-
-        <Status value={room.status}/>
-
-      </div>
-
+    <article
+      id={room.id!=null?`orgroom-room-${room.id}`:undefined}
+      className={`room-card ${focused?'global-search-room-focused':''}`}
+    >
+      <RoomImage key={room.id} room={room} className="room-card-photo"/>
 
       <div className="room-body">
-
         <span className="room-building">
           <Building2/>
-          {room._displayBuilding || room.building}
+          {room.building}
         </span>
 
-        <h3>
-          {room._displayName || room.name}
-        </h3>
+        <div className="room-card-title-row">
+          <h3>{room.name}</h3>
+          <Status value={room.status}/>
+        </div>
 
-        <p>
-          {room.description ||
-            'Flexible campus space for classes, meetings, and approved activities.'
-          }
-        </p>
-
+        {room.description&&<p>{room.description}</p>}
 
         <div className="room-meta">
+          {room.capacity!=null&&(
+            <span><Users/>{room.capacity} seats</span>
+          )}
 
-          <span>
-            <Users/>
-            {room.capacity ? `${room.capacity} seats` : 'Capacity not listed'}
-          </span>
-
-          <span>
-            <Armchair/>
-            {room.type}
-          </span>
-
+          {room.type&&(
+            <span><Armchair/>{room.type}</span>
+          )}
         </div>
 
-
-        <div className="amenities">
-
-          {(room.amenities||[])
-            .slice(0,4)
-            .map(a=>(
-              <span key={a}>
-                {a}
-              </span>
+        {!!(room.amenities||[]).length&&(
+          <div className="amenities">
+            {(room.amenities||[]).slice(0,4).map(amenity=>(
+              <span key={amenity}>{amenity}</span>
             ))}
-
-        </div>
-
+          </div>
+        )}
       </div>
 
-
       <button
-        className="outline-btn full"
-        disabled={room.status==='OCCUPIED'||room.status==='UNAVAILABLE'}
+        type="button"
+        className="outline-btn full room-select-action"
+        disabled={unavailable}
         onClick={onBook}
       >
-        {
-          room.status==='OCCUPIED'
-            ? 'Currently occupied'
-            : room.status==='UNAVAILABLE'
-              ? 'Currently unavailable'
-              : 'Reserve this room'
-        }
-
+        {room.status==='OCCUPIED'
+          ? 'Currently occupied'
+          : room.status==='UNAVAILABLE'
+            ? 'Currently unavailable'
+            : 'Reserve this room'}
         <ChevronRight/>
       </button>
-
     </article>
   );
 }
@@ -2563,9 +2329,18 @@ function ReservationModal({
     <div className="modal-backdrop">
       <div className="modal wide reservation-smart-modal">
         <button className="modal-close" onClick={handleClose} aria-label="Close reservation form"><X/></button>
-        <div className="modal-hero">
+        <div className="modal-hero reservation-room-hero">
+          <RoomImage room={room} className="reservation-room-photo"/>
           <div className="room-symbol big"><DoorOpen/></div>
-          <div><span className="eyebrow">NEW RESERVATION</span><h2>{room.name}</h2><p>{room.building} · {room.capacity ? `${room.capacity} seats` : 'Capacity not listed'} · {room.type}</p></div>
+          <div>
+            <span className="eyebrow">NEW RESERVATION</span>
+            <h2>{room.name}</h2>
+            <p>
+              {room.building}
+              {room.capacity!=null?` · ${room.capacity} seats`:''}
+              {room.type?` · ${room.type}`:''}
+            </p>
+          </div>
         </div>
 
         {error&&<div className="alert danger"><CircleAlert/>{error}</div>}
@@ -3042,13 +2817,14 @@ function Calendar({
                       className={`calendar-room-availability ${availability.className}`}
                       key={room.id}
                     >
-                      <div className="calendar-room-availability-icon">
-                        <DoorOpen/>
-                      </div>
+                      <RoomImage room={room} className="calendar-room-photo"/>
 
                       <div className="calendar-room-availability-info">
                         <b>{room._displayName}</b>
-                        <span>{room.capacity ? `${room.capacity} seats` : 'Capacity not listed'} · {room.type}</span>
+                        <span>
+                          {room.capacity!=null?`${room.capacity} seats`:'Capacity not listed'}
+                          {room.type?` · ${room.type}`:''}
+                        </span>
                       </div>
 
                       <div className="calendar-room-availability-status">
@@ -3104,7 +2880,7 @@ function ReservationReminderCenter({reservations,user}){
   const [serverNowMs,setServerNowMs]=useState(null),[syncedAt,setSyncedAt]=useState(null),[tick,setTick]=useState(Date.now()),[notice,setNotice]=useState(null);
   useEffect(()=>{let cancelled=false;const sync=async()=>{try{const data=await api('/api/server-time');if(!cancelled){setServerNowMs(Number(data.serverNowMs));setSyncedAt(Date.now());}}catch{}};sync();const a=setInterval(sync,10000),b=setInterval(()=>setTick(Date.now()),1000);return()=>{cancelled=true;clearInterval(a);clearInterval(b);};},[]);
   useEffect(()=>{
-    if(!user||String(user.role||'').toLowerCase()==='admin'||serverNowMs==null)return;
+    if(!user||hasAdminAccess(user.role)||serverNowMs==null)return;
     const now=serverNowMs+(tick-(syncedAt||tick));
     const approved=(reservations||[]).filter(r=>r.status==='APPROVED'&&Number(r.userId)===Number(user.id));
     for(const r of approved){
@@ -3148,7 +2924,7 @@ function Reservations({
   const [status,setStatus]=useState('ALL');
   const [selected,setSelected]=useState(null);
 
-  const isAdmin=user.role==='admin';
+  const isAdmin=hasAdminAccess(user.role);
 
   useEffect(()=>{
     if(!focusId) return;
@@ -3258,7 +3034,10 @@ function Reservations({
             <div className="upcoming-reservation-list">
               {upcoming.slice(0,4).map(r=>(
                 <button className="upcoming-reservation-card" key={r.id} onClick={()=>setSelected(r.id)}>
-                  <div className="upcoming-room-icon"><DoorOpen/></div>
+                  <RoomImage
+                    room={{id:r.facilityId,name:r.roomName,building:r.building}}
+                    className="reservation-list-room-photo"
+                  />
                   <div className="upcoming-main">
                     <b>{r.roomName}</b>
                     <span>{r.building}</span>
@@ -3310,7 +3089,10 @@ function Reservations({
           <div className="reservation-history-list">
             {list.map(r=>(
               <button className="reservation-history-card" key={r.id} onClick={()=>setSelected(r.id)}>
-                <div className="reservation-history-icon"><DoorOpen/></div>
+                <RoomImage
+                  room={{id:r.facilityId,name:r.roomName,building:r.building}}
+                  className="reservation-list-room-photo"
+                />
                 <div className="reservation-history-main">
                   <div className="reservation-history-title">
                     <b>{r.roomName}</b>
@@ -3407,6 +3189,11 @@ function ReservationDetail({
 
       <div className="detail-head">
 
+        <RoomImage
+          room={{id:r.facilityId,name:r.roomName,building:r.building}}
+          className="reservation-detail-room-photo"
+        />
+
         <div>
 
           <span className="eyebrow">
@@ -3498,7 +3285,7 @@ function ReservationDetail({
           </div>
         )}
 
-        {user.role==='admin' && r.status==='APPROVED' && (
+        {hasAdminAccess(user.role) && r.status==='APPROVED' && (
           <div className="span-2 reminder-admin-status">
             <span>Reminder delivery</span>
             <div><b>Start reminder:</b> {r.startReminderStatus==='SENT' ? 'Sent ✓' : r.startReminderStatus==='FAILED' ? 'Failed' : 'Pending'} &nbsp; <b>End reminder:</b> {r.endReminderStatus==='SENT' ? 'Sent ✓' : r.endReminderStatus==='FAILED' ? 'Failed' : 'Pending'}</div>
@@ -3508,7 +3295,7 @@ function ReservationDetail({
       </div>
 
 
-      {(r.status!=='CANCELLED' && r.status!=='REJECTED') && (user.role==='admin'||r.status==='PENDING'||(Number(r.userId)===Number(user.id)&&r.status==='APPROVED')) && (
+      {(r.status!=='CANCELLED' && r.status!=='REJECTED') && (hasAdminAccess(user.role)||r.status==='PENDING'||(Number(r.userId)===Number(user.id)&&r.status==='APPROVED')) && (
         <div className="modal-actions">
 
           <button
@@ -3623,9 +3410,10 @@ function Requests({
 
             <div className="request-main">
 
-              <div className="row-icon">
-                <DoorOpen/>
-              </div>
+              <RoomImage
+                room={{id:r.facilityId,name:r.roomName,building:r.building}}
+                className="admin-request-room-photo"
+              />
 
               <div>
 
@@ -3882,7 +3670,7 @@ function Profile({
               <CheckCircle2/>
               <span>Approval controls</span>
               <b>
-                {user.role==='admin'
+                {hasAdminAccess(user.role)
                   ? 'Enabled'
                   : 'Restricted'
                 }
@@ -4099,7 +3887,7 @@ function RoomUsageCheck({user,requestConfirmation}){
   const [refreshTick,setRefreshTick]=useState(0);
 
   const loadUsage=async()=>{
-    if(user?.role!=='admin') return;
+    if(!hasAdminAccess(user?.role)) return;
     setLoading(true);
     try{
       const data=await api(`/api/room-usage?date=${encodeURIComponent(date)}`,{
@@ -4267,7 +4055,20 @@ function RoomUsageCheck({user,requestConfirmation}){
                   return (
                     <article className={`room-usage-card ${timeline.toLowerCase()}`} key={record.reservation.id}>
                       <div className="usage-card-main">
-                        <div className="usage-room-line"><div className="usage-room-icon"><DoorOpen/></div><div><h4>{record.reservation.roomName}</h4><span>{record.reservation.timeSlot}</span></div></div>
+                        <div className="usage-room-line">
+                          <RoomImage
+                            room={{
+                              id:record.reservation.facilityId,
+                              name:record.reservation.roomName,
+                              building:record.reservation.building
+                            }}
+                            className="usage-room-photo"
+                          />
+                          <div>
+                            <h4>{record.reservation.roomName}</h4>
+                            <span>{record.reservation.timeSlot}</span>
+                          </div>
+                        </div>
                         <div className="usage-person"><UserRound/><div><b>{record.reservation.userName}</b><span>{record.reservation.purpose || 'No purpose provided'}</span></div></div>
                         <div className="usage-timeline"><span className={`timeline-badge ${timeline.toLowerCase()}`}>{timeline==='NOW'&&<span className="live-dot"/>}{timelineLabel(timeline)}</span><small>{record.reservation.eventType || 'Reservation'}</small></div>
                       </div>
@@ -4299,149 +4100,141 @@ function RoomUsageCheck({user,requestConfirmation}){
 /* ============================================================
    ADMIN USER MANAGEMENT
    ============================================================ */
-function UserManagement({initialSearch=''}){
+function UserManagement({initialSearch='',currentUser}){
   const [users,setUsers]=useState([]);
+  const [capacity,setCapacity]=useState(null);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
+  const [updatingId,setUpdatingId]=useState(null);
+  const [editingUserId,setEditingUserId]=useState(null);
+  const [editForm,setEditForm]=useState({name:'',email:''});
   const [error,setError]=useState('');
   const [info,setInfo]=useState('');
   const [search,setSearch]=useState('');
+  const [roleFilter,setRoleFilter]=useState('ALL');
   const [role,setRole]=useState('TEACHER');
   const [form,setForm]=useState({name:'',email:'',password:''});
+  const actorIsSuperAdmin=isSuperAdmin(currentUser?.role);
 
   useEffect(()=>{if(initialSearch)setSearch(initialSearch);},[initialSearch]);
 
   const loadUsers=async()=>{
-    setLoading(true);
-    setError('');
+    setLoading(true);setError('');
     try{
-      const rows=await api('/api/users');
+      const [rows,usage]=await Promise.all([api('/api/users'),api('/api/users/capacity')]);
       setUsers(Array.isArray(rows)?rows:[]);
-    }catch(e){setError(e.message||'Unable to load user accounts.');}
+      setCapacity(usage);
+    }
+    catch(e){setError(e.message||'Unable to load user accounts.');}
     finally{setLoading(false);}
   };
-
   useEffect(()=>{loadUsers();},[]);
 
   const submit=async()=>{
     if(saving)return;
-    setError('');
-    setInfo('');
-    const name=form.name.trim();
-    const email=form.email.trim();
-    if(!name||!email||!form.password){
-      setError('Name, email, password, and role are required.');
-      return;
-    }
+    setError('');setInfo('');
+    const name=form.name.trim(),email=form.email.trim();
+    if(!name||!email||!form.password){setError('Name, email, password, and role are required.');return;}
     setSaving(true);
     try{
-      const result=await api('/api/users',{
-        method:'POST',
-        body:JSON.stringify({name,email,password:form.password,role})
-      });
-      setUsers(current=>[result.user,...current]);
-      setForm({name:'',email:'',password:''});
+      const result=await api('/api/users',{method:'POST',body:JSON.stringify({name,email,password:form.password,role})});
+      setUsers(current=>[result.user,...current]);setForm({name:'',email:'',password:''});
+      try{setCapacity(await api('/api/users/capacity'));}catch{}
       setInfo(result.message||'Account created successfully.');
     }catch(e){setError(e.message||'Unable to create the account.');}
     finally{setSaving(false);}
   };
 
+  const beginEditUser=u=>{setEditingUserId(u.id);setEditForm({name:u.name||'',email:u.email||''});setError('');setInfo('');};
+
+  const saveUserDetails=async u=>{
+    setUpdatingId(u.id);setError('');setInfo('');
+    try{
+      const result=await api(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify(editForm)});
+      setUsers(current=>current.map(item=>item.id===u.id?result.user:item));
+      setEditingUserId(null);setInfo(result.message||'Account details updated.');
+    }catch(e){setError(e.message||'Unable to update account details.');}
+    finally{setUpdatingId(null);}
+  };
+
+  const updateUser=async(u,changes)=>{
+    setUpdatingId(u.id);setError('');setInfo('');
+    try{
+      const result=await api(`/api/users/${u.id}`,{method:'PATCH',body:JSON.stringify(changes)});
+      setUsers(current=>current.map(item=>item.id===u.id?result.user:item));
+      setInfo(result.message||'Account updated.');
+    }catch(e){setError(e.message||'Unable to update the account.');}
+    finally{setUpdatingId(null);}
+  };
+
+  const deactivateUser=async u=>{
+    if(!window.confirm(`Deactivate ${u.name}'s account? Their account and reservation history will be preserved.`))return;
+    setUpdatingId(u.id);setError('');setInfo('');
+    try{
+      const result=await api(`/api/users/${u.id}`,{method:'DELETE'});
+      setUsers(current=>current.map(item=>item.id===u.id?{...item,isActive:false}:item));
+      setInfo(result.message||'Account deactivated.');
+    }catch(e){setError(e.message||'Unable to deactivate the account.');}
+    finally{setUpdatingId(null);}
+  };
+
   const filtered=users.filter(u=>{
     const q=search.trim().toLowerCase();
-    if(!q)return true;
-    return [u.name,u.email,u.role,u.organization,u.department].some(v=>String(v||'').toLowerCase().includes(q));
+    const matchesSearch=!q||[u.name,u.email,u.role,u.organization,u.department].some(v=>String(v||'').toLowerCase().includes(q));
+    const matchesRole=roleFilter==='ALL'||String(u.role||'').toUpperCase()===roleFilter;
+    return matchesSearch&&matchesRole;
   });
 
   return (
     <div className="page user-management-page">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">ADMIN ONLY</span>
-          <h2>User Management</h2>
-          <p>Create and manage the real Teacher and Admin accounts used by ORGROOM authentication.</p>
+      <div className="page-head"><div><span className="eyebrow">{actorIsSuperAdmin?'SUPER ADMIN':'ADMIN'} ONLY</span><h2>User Management</h2><p>Create and manage Teacher and Admin accounts. Super Admin accounts are protected from routine account changes.</p></div></div>
+      <section className="account-capacity-panel" aria-live="polite">
+        <div className="account-capacity-copy">
+          <strong>{capacity?`${capacity.currentCount} / ${capacity.maxAccounts} Accounts Used`:'Loading account capacity…'}</strong>
+          <span>{capacity?`${capacity.remainingSlots} account slot${capacity.remainingSlots===1?'':'s'} remaining. Inactive accounts are included.`:'Checking the current number of accounts.'}</span>
         </div>
-      </div>
-
-      {error && <div className="alert danger"><CircleAlert/>{error}</div>}
-      {info && <div className="alert success"><CheckCircle2/>{info}</div>}
-
+        {capacity&&<div className="account-capacity-track" role="progressbar" aria-valuemin={0} aria-valuemax={capacity.maxAccounts} aria-valuenow={Math.min(capacity.currentCount,capacity.maxAccounts)} aria-label="Account capacity used"><span style={{width:`${Math.min(100,(capacity.currentCount/Math.max(1,capacity.maxAccounts))*100)}%`}}/></div>}
+      </section>
+      {capacity?.isAtCapacity&&<div className="alert danger"><CircleAlert/>Account capacity has been reached. No additional accounts can be created until the configured limit is increased. Deactivated accounts still count toward the limit.</div>}
+      {error&&<div className="alert danger"><CircleAlert/>{error}</div>}
+      {info&&<div className="alert success"><CheckCircle2/>{info}</div>}
       <div className="user-management-grid">
         <section className="panel user-create-panel">
-          <div className="panel-head">
-            <div>
-              <h3>Create account</h3>
-              <p>The account will be saved to the ORGROOM database and use the normal email verification flow.</p>
-            </div>
-            <div className="user-management-icon"><UserRound/></div>
-          </div>
-
+          <div className="panel-head"><div><h3>Create account</h3><p>New accounts are saved securely and must complete email verification when signing in.</p></div><div className="user-management-icon"><UserRound/></div></div>
           <div className="form-stack">
-            <label>
-              Full name
-              <input value={form.name} onChange={e=>setForm(v=>({...v,name:e.target.value}))} placeholder="Juan Dela Cruz" autoComplete="name"/>
-            </label>
-            <label>
-              Email
-              <input value={form.email} onChange={e=>setForm(v=>({...v,email:e.target.value}))} placeholder="name@gmail.com" type="email" autoComplete="email"/>
-            </label>
-            <label>
-              Role
-              <select value={role} onChange={e=>setRole(e.target.value)}>
-                <option value="TEACHER">Teacher</option>
-                <option value="ADMIN">Admin</option>
-              </select>
-            </label>
-            <label>
-              Initial password
-              <input value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))} placeholder="At least 8 characters" type="password" autoComplete="new-password"/>
-              <small className="field-help">At least 8 characters with a letter and a number.</small>
-            </label>
-            <button className="primary-btn" disabled={saving} onClick={submit}>
-              <Plus/>
-              {saving ? 'Creating account…' : `Create ${role==='ADMIN'?'Admin':'Teacher'} Account`}
-            </button>
+            <label>Full name<input value={form.name} onChange={e=>setForm(v=>({...v,name:e.target.value}))} placeholder="Juan Dela Cruz" autoComplete="name"/></label>
+            <label>Email<input value={form.email} onChange={e=>setForm(v=>({...v,email:e.target.value}))} placeholder="name@gmail.com" type="email" autoComplete="email"/></label>
+            <label>Role<select value={role} onChange={e=>setRole(e.target.value)}><option value="TEACHER">Teacher</option><option value="ADMIN">Admin</option></select></label>
+            <label>Initial password<input value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))} placeholder="At least 8 characters" type="password" autoComplete="new-password"/><small className="field-help">At least 8 characters with a letter and a number. Passwords are stored as hashes.</small></label>
+            <button className="primary-btn" disabled={saving||!capacity||capacity.remainingSlots<=0} onClick={submit}><Plus/>{saving?'Creating account…':capacity?.remainingSlots<=0?'Account capacity reached':`Create ${role==='ADMIN'?'Admin':'Teacher'} Account`}</button>
           </div>
         </section>
-
         <section className="panel user-list-panel">
-          <div className="panel-head">
-            <div>
-              <h3>Existing accounts</h3>
-              <p>{users.length} account{users.length===1?'':'s'} in the database.</p>
-            </div>
-            <button className="icon-btn" onClick={loadUsers} disabled={loading} title="Refresh users" aria-label="Refresh users"><RefreshCw className={loading?'spin':''}/></button>
-          </div>
-
-          <div className="user-search">
-            <Search/>
-            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, email, or role"/>
-          </div>
-
-          {loading ? (
-            <div className="user-empty"><RefreshCw className="spin"/><span>Loading accounts…</span></div>
-          ) : !filtered.length ? (
-            <div className="user-empty"><Users/><b>No matching accounts</b><span>Try another search.</span></div>
-          ) : (
-            <div className="user-table-wrap">
-              <table className="user-table">
-                <thead><tr><th>User</th><th>Role</th><th>Verification</th><th>Created</th></tr></thead>
-                <tbody>
-                  {filtered.map(u=>(
-                    <tr key={u.id}>
-                      <td>
-                        <div className="user-cell">
-                          <div className="avatar">{initials(u.name)}</div>
-                          <div><b>{u.name}</b><span>{u.email}</span></div>
-                        </div>
-                      </td>
-                      <td><span className={`role-pill ${String(u.role).toLowerCase()}`}>{u.role}</span></td>
-                      <td><span className={`status ${u.isVerified?'approved':'pending'}`}><i/>{u.isVerified?'Verified':'Pending verification'}</span></td>
-                      <td>{u.createdAt ? new Date(String(u.createdAt).replace(' ','T')).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div className="panel-head"><div><h3>Existing accounts</h3><p>{capacity?`${capacity.currentCount} total account${capacity.currentCount===1?'':'s'} in the database, including inactive accounts.`:`${users.length} account${users.length===1?'':'s'} loaded.`}</p></div><button className="icon-btn" onClick={loadUsers} disabled={loading} title="Refresh users" aria-label="Refresh users"><RefreshCw className={loading?'spin':''}/></button></div>
+          <div className="user-search"><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, email, or role"/><select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)} aria-label="Filter accounts by role"><option value="ALL">All roles</option><option value="SUPER_ADMIN">Super Admin</option><option value="ADMIN">Admin</option><option value="TEACHER">Teacher</option></select></div>
+          {loading?<div className="user-empty"><RefreshCw className="spin"/><span>Loading accounts…</span></div>:!filtered.length?<div className="user-empty"><Users/><b>No matching accounts</b><span>Try another search or role filter.</span></div>:(
+            <div className="user-table-wrap"><table className="user-table">
+              <thead><tr><th>User</th><th>Role</th><th>Account</th><th>Verification</th><th>Created</th><th>Actions</th></tr></thead>
+              <tbody>{filtered.map(u=>{
+                const targetRole=String(u.role||'').toUpperCase();
+                const protectedAccount=targetRole==='SUPER_ADMIN';
+                const manageable=Number(u.id)!==Number(currentUser?.id)&&!protectedAccount&&(actorIsSuperAdmin||targetRole==='TEACHER');
+                return <React.Fragment key={u.id}><tr>
+                  <td><div className="user-cell"><div className="avatar">{initials(u.name)}</div><div><b>{u.name}</b><span>{u.email}</span></div></div></td>
+                  <td><span className={`role-pill ${targetRole.toLowerCase()}`}>{targetRole==='SUPER_ADMIN'?'Super Admin':targetRole==='ADMIN'?'Admin':'Teacher'}</span></td>
+                  <td><span className={`status ${u.isActive?'approved':'rejected'}`}><i/>{u.isActive?'Active':'Deactivated'}</span></td>
+                  <td><span className={`status ${u.isVerified?'approved':'pending'}`}><i/>{u.isVerified?'Verified':'Pending verification'}</span></td>
+                  <td>{u.createdAt?new Date(String(u.createdAt).replace(' ','T')).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+                  <td><div className="user-account-actions">
+                    {manageable&&<button disabled={updatingId===u.id} onClick={()=>beginEditUser(u)}>Edit</button>}
+                    {manageable&&actorIsSuperAdmin&&<select aria-label={`Change role for ${u.name}`} value={targetRole} disabled={updatingId===u.id} onChange={e=>updateUser(u,{role:e.target.value})}><option value="TEACHER">Teacher</option><option value="ADMIN">Admin</option></select>}
+                    {manageable&&u.isActive?<button disabled={updatingId===u.id} onClick={()=>deactivateUser(u)}>{updatingId===u.id?'Saving…':'Deactivate'}</button>:manageable?<button disabled={updatingId===u.id} onClick={()=>updateUser(u,{isActive:true})}>{updatingId===u.id?'Saving…':'Reactivate'}</button>:protectedAccount?<span className="field-help">Protected</span>:Number(u.id)===Number(currentUser?.id)?<span className="field-help">Your account</span>:<span className="field-help">—</span>}
+                  </div></td>
+                </tr>
+                {manageable&&editingUserId===u.id&&<tr><td colSpan={6}><div className="user-inline-edit"><label>Full name<input value={editForm.name} onChange={e=>setEditForm(v=>({...v,name:e.target.value}))}/></label><label>Email<input type="email" value={editForm.email} onChange={e=>setEditForm(v=>({...v,email:e.target.value}))}/></label><div><button disabled={updatingId===u.id} onClick={()=>saveUserDetails(u)}>{updatingId===u.id?'Saving…':'Save details'}</button><button disabled={updatingId===u.id} onClick={()=>setEditingUserId(null)}>Cancel</button></div></div></td></tr>}
+                </React.Fragment>;
+              })}</tbody>
+            </table></div>
           )}
         </section>
       </div>
@@ -4492,6 +4285,8 @@ export default function App(){
   const [notifications,setNotifications]=useState([]);
   const [unreadNotifications,setUnreadNotifications]=useState(0);
   const [notificationsOpen,setNotificationsOpen]=useState(false);
+  const [chatOpen,setChatOpen]=useState(false);
+  const [chatConversationId,setChatConversationId]=useState(null);
   const [focusReservationId,setFocusReservationId]=useState(null);
   const [searchPageQuery,setSearchPageQuery]=useState('');
   const [searchFocusRoomId,setSearchFocusRoomId]=useState(null);
@@ -4504,7 +4299,7 @@ export default function App(){
   useEffect(()=>{
     if(!user) return;
 
-    const allowedTabs=user.role==='admin'
+    const allowedTabs=hasAdminAccess(user.role)
       ? new Set(['home','calendar','rooms','reservations','requests','room-usage','user-management','profile','search-results'])
       : new Set(['home','calendar','rooms','reservations','profile','search-results']);
 
@@ -4576,7 +4371,7 @@ export default function App(){
         const raw=reservation.replace(/^OR-/i,'');
         if(raw){
           setFocusReservationId(raw);
-          if(user.role==='admin' && targetTab==='requests') setTab('requests');
+          if(hasAdminAccess(user.role) && targetTab==='requests') setTab('requests');
           else setTab('reservations');
           window.history.replaceState({},document.title,window.location.pathname);
         }
@@ -4702,7 +4497,7 @@ export default function App(){
 
 
   const remove=async(id)=>{
-    const isAdmin=String(user?.role||'').toLowerCase()==='admin';
+    const isAdmin=hasAdminAccess(user?.role);
     await requestConfirmation({
       title:isAdmin?'Cancel this reservation?':'Cancel this reservation?',
       description:isAdmin
@@ -4741,10 +4536,16 @@ export default function App(){
   const handleNotificationClose=(notification)=>{
     setNotificationsOpen(false);
     if(notification){
-      setNotifications(current=>current.map(item=>item.id===notification.id?{...item,isRead:true}:item));
-      setUnreadNotifications(count=>Math.max(0,count-1));
+      if(notification.type!=='CHAT_MESSAGE'){
+        setNotifications(current=>current.map(item=>item.id===notification.id?{...item,isRead:true}:item));
+        setUnreadNotifications(count=>Math.max(0,count-1));
+      }
+      if(notification.type==='CHAT_MESSAGE' && notification.conversationId){
+        setChatConversationId(Number(notification.conversationId));
+        setChatOpen(true);
+      }
       if(notification.reservationId){
-        if(user.role==='admin'){
+        if(hasAdminAccess(user.role)){
           setFocusReservationId(notification.reservationId);
           setTab('requests');
         }else{
@@ -4768,10 +4569,10 @@ export default function App(){
       if(item.personKind==='instructor'){
         setCalendarInstructorFocus(item);
         setTab('calendar');
-      }else if(item.personKind==='requester' && user.role==='admin'){
+      }else if(item.personKind==='requester' && hasAdminAccess(user.role)){
         setReservationsSearchQuery(item.title||'');
         setTab('reservations');
-      }else if(user.role==='admin'){
+      }else if(hasAdminAccess(user.role)){
         setUserSearchQuery(item.title||'');
         setTab('user-management');
       }else{
@@ -4804,8 +4605,8 @@ export default function App(){
 
   const titles={
     home:[
-      user.role==='admin' ? 'Admin dashboard' : 'Overview',
-      user.role==='admin' ? 'Campus operations and reservation control.' : 'A clear view of your campus activity.'
+      hasAdminAccess(user.role) ? 'Admin dashboard' : 'Overview',
+      hasAdminAccess(user.role) ? 'Campus operations and reservation control.' : 'A clear view of your campus activity.'
     ],
 
     calendar:[
@@ -4820,8 +4621,8 @@ export default function App(){
 
 
     reservations:[
-      user.role==='admin' ? 'Reservations' : 'My reservations',
-      user.role==='admin' ? 'Track and manage campus reservation records.' : 'Track your submitted requests, approvals, and reservation history.'
+      hasAdminAccess(user.role) ? 'Reservations' : 'My reservations',
+      hasAdminAccess(user.role) ? 'Track and manage campus reservation records.' : 'Track your submitted requests, approvals, and reservation history.'
     ],
 
     requests:[
@@ -4855,7 +4656,7 @@ export default function App(){
 
 
   if(tab==='home')
-    content=user.role==='admin'
+    content=hasAdminAccess(user.role)
       ? (
         <AdminDashboard
           rooms={rooms}
@@ -4919,7 +4720,7 @@ export default function App(){
 
   if(
     tab==='requests' &&
-    user.role==='admin'
+    hasAdminAccess(user.role)
   )
     content=(
       <Requests
@@ -4932,12 +4733,12 @@ export default function App(){
     );
 
 
-  if(tab==='room-usage' && user.role==='admin')
+  if(tab==='room-usage' && hasAdminAccess(user.role))
     content=(<RoomUsageCheck user={user} requestConfirmation={requestConfirmation}/>);
 
 
-  if(tab==='user-management' && user.role==='admin')
-    content=(<UserManagement initialSearch={userSearchQuery}/>);
+  if(tab==='user-management' && hasAdminAccess(user.role))
+    content=(<UserManagement initialSearch={userSearchQuery} currentUser={user}/>);
 
   if(tab==='search-results')
     content=(<SearchResultsPage query={searchPageQuery} user={user} onSelect={handleGlobalSearchSelect}/>);
@@ -4956,7 +4757,7 @@ export default function App(){
     <>
       <div className={`app-shell ${theme==='dark' ? 'dark-mode' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
 
-      {user.role==='admin' ? (
+      {hasAdminAccess(user.role) ? (
         <AdminSidebar
           tab={tab}
           setTab={setTab}
@@ -5064,6 +4865,16 @@ export default function App(){
         tab={tab}
         setTab={setTab}
         user={user}
+      />
+
+      <ChatWidget
+        api={api}
+        user={user}
+        theme={theme}
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        selectedConversationId={chatConversationId}
+        onSelectConversation={setChatConversationId}
       />
 
     </div>

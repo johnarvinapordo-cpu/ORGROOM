@@ -253,7 +253,7 @@ CREATE TABLE `users` (
   `is_verified` tinyint(1) NOT NULL DEFAULT 1,
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` datetime NOT NULL DEFAULT current_timestamp(),
-  CONSTRAINT `chk_users_role` CHECK (`role` IN ('TEACHER','ADMIN'))
+  CONSTRAINT `chk_users_role` CHECK (`role` IN ('TEACHER','ADMIN','SUPER_ADMIN'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --

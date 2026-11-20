@@ -6953,6 +6953,13 @@ html:not(.dark-mode) .admin-sidebar nav button.active {
 .user-management-page .page-head{margin-bottom:20px}
 .user-management-page .page-head h2{margin:4px 0 6px}
 .user-management-page .page-head p{margin:0;max-width:760px;color:var(--muted)}
+.account-capacity-panel{display:flex;align-items:center;justify-content:space-between;gap:22px;margin:0 0 18px;padding:15px 18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:var(--shadow-sm)}
+.account-capacity-copy{display:grid;gap:4px;min-width:0}
+.account-capacity-copy strong{color:var(--ink);font-size:15px}
+.account-capacity-copy span{color:var(--muted);font-size:12px;line-height:1.45}
+.account-capacity-track{width:min(34%,260px);height:9px;flex:none;overflow:hidden;border-radius:99px;background:var(--panel-soft)}
+.account-capacity-track span{display:block;height:100%;border-radius:inherit;background:var(--primary);transition:width .2s ease}
+@media(max-width:600px){.account-capacity-panel{align-items:stretch;flex-direction:column;gap:12px}.account-capacity-track{width:100%}}
 .user-management-grid{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:20px;align-items:start}
 .user-create-panel,.user-list-panel{min-width:0}
 .user-management-icon{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:var(--primary-soft);color:var(--primary)}
@@ -6962,8 +6969,19 @@ html:not(.dark-mode) .admin-sidebar nav button.active {
 .user-search{display:flex;align-items:center;gap:10px;border:1px solid var(--border);background:var(--input-surface);border-radius:12px;padding:0 12px;margin:0 0 14px}
 .user-search svg{width:17px;height:17px;color:var(--muted);flex:none}
 .user-search input{border:0!important;background:transparent!important;box-shadow:none!important;min-width:0;width:100%;height:42px;padding:0!important}
+ .user-search select{max-width:150px;min-width:115px;height:36px;border:1px solid var(--border);border-radius:9px;background:var(--panel);color:var(--ink);padding:0 9px;font:inherit;font-size:12px}
+.user-account-actions{display:flex;align-items:center;gap:7px;min-width:140px}
+.user-account-actions select{max-width:112px;min-width:96px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--ink);padding:0 7px;font:inherit;font-size:12px}
+.user-account-actions button{border:1px solid var(--border);background:var(--panel-soft);color:var(--ink);border-radius:8px;padding:7px 10px;font:inherit;font-size:11px;font-weight:700;white-space:nowrap;cursor:pointer}
+.user-account-actions button:hover{border-color:var(--primary);color:var(--primary)}
+.user-account-actions button:disabled{opacity:.55;cursor:not-allowed}
+ .user-inline-edit{display:grid;grid-template-columns:minmax(160px,1fr) minmax(180px,1fr) auto;gap:12px;align-items:end;padding:8px 4px}
+.user-inline-edit label{display:grid;gap:5px;color:var(--ink-soft);font-size:12px;font-weight:700}
+.user-inline-edit input{min-width:0;width:100%;height:36px;border:1px solid var(--border);border-radius:8px;background:var(--input-surface);color:var(--ink);padding:0 10px}
+.user-inline-edit>div{display:flex;gap:7px}
+@media(max-width:700px){.user-inline-edit{grid-template-columns:1fr}.user-inline-edit>div{justify-content:flex-start}}
 .user-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:14px}
-.user-table{width:100%;border-collapse:collapse;min-width:620px}
+.user-table{width:100%;border-collapse:collapse;min-width:920px}
 .user-table th{background:var(--panel-soft);color:var(--ink-soft);font-size:11px;text-transform:uppercase;letter-spacing:.08em;text-align:left;padding:11px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
 .user-table td{padding:12px 14px;border-bottom:1px solid var(--border);color:var(--ink-soft);vertical-align:middle}
 .user-table tbody tr:last-child td{border-bottom:0}
@@ -6973,7 +6991,7 @@ html:not(.dark-mode) .admin-sidebar nav button.active {
 .user-cell b{display:block;color:var(--ink);font-size:13px}
 .user-cell span{display:block;color:var(--muted);font-size:12px;margin-top:2px;word-break:break-word}
 .role-pill{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:800;letter-spacing:.04em}
-.role-pill.admin{background:var(--primary-soft);color:var(--primary-dark)}
+.role-pill.admin,.role-pill.super_admin{background:var(--primary-soft);color:var(--primary-dark)}
 .role-pill.teacher{background:var(--success-soft);color:#087443}
 .user-empty{min-height:190px;border:1px dashed var(--border);border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--muted);text-align:center}
 .user-empty svg{width:24px;height:24px}
@@ -6986,7 +7004,7 @@ html:not(.dark-mode) .admin-sidebar nav button.active {
   .user-management-grid{gap:14px}
   .user-create-panel,.user-list-panel{border-radius:14px}
   .user-table-wrap{margin-left:-2px;margin-right:-2px}
-  .user-table{min-width:580px}
+  .user-table{min-width:920px}
 }
 
 /* ============================================================
@@ -7114,3 +7132,2141 @@ html:not(.dark-mode) .global-search-field input { background: transparent !impor
 .calendar-instructor-search-match p { margin:0; color:var(--muted); font-size:11px; line-height:1.5; }
 .calendar-instructor-search-match .text-btn { flex:0 0 auto; }
 @media(max-width:560px) { .calendar-instructor-search-match { align-items:flex-start; padding:12px; } .calendar-instructor-search-match p { overflow-wrap:anywhere; } }
+/* =========================================================
+   ORGROOM — MIDNIGHT NAVY + ELECTRIC BLUE REDESIGN
+   Visual-only overrides. Existing components, data, and
+   interactions remain in place.
+   ========================================================= */
+
+:root {
+  --org-navy: #101D35;
+  --org-navy-surface: #1C3155;
+  --org-blue: #3478F6;
+  --org-blue-light: #70B7FF;
+  --org-light-bg: #F1F5FB;
+  --org-white: #FFFFFF;
+  --org-text: #17243A;
+  --org-muted: #65748B;
+  --org-border: #DCE5F0;
+  --org-dark-bg: #0B1425;
+  --org-dark-surface: #101D35;
+  --org-dark-elevated: #1C3155;
+  --org-dark-text: #F3F7FF;
+  --org-dark-muted: #A6B5CA;
+  --org-dark-border: #2A3B57;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html:not(.dark-mode) body {
+  background: var(--org-light-bg);
+  color: var(--org-text);
+}
+
+html:not(.dark-mode) .app-shell {
+  --ink: var(--org-text);
+  --ink-soft: #34445E;
+  --muted: var(--org-muted);
+  --line: var(--org-border);
+  --line-dark: #C6D3E3;
+  --border: var(--org-border);
+  --text: var(--org-text);
+  --background: var(--org-light-bg);
+  --panel: var(--org-white);
+  --surface: var(--org-white);
+  --surface-2: #F6F9FE;
+  --panel-soft: #F6F9FE;
+  --panel-strong: #EAF1FA;
+  --hover-surface: #EDF4FF;
+  --input-surface: #FFFFFF;
+  --sidebar-surface: var(--org-navy);
+  --primary: var(--org-blue);
+  --primary-dark: #245FCB;
+  --primary-soft: #EAF1FF;
+  --accent: var(--org-blue);
+  --success: #168653;
+  --success-soft: #E8F7EF;
+  --warning: #B97712;
+  --warning-soft: #FFF4DF;
+  --danger: #C83E50;
+  --danger-soft: #FDECEF;
+  --purple: #7357C8;
+  --purple-soft: #F0EDFC;
+  --shadow-sm: 0 1px 2px rgba(16, 29, 53, .045);
+  --shadow: 0 8px 24px rgba(16, 29, 53, .055);
+  --shadow-lg: 0 20px 52px rgba(16, 29, 53, .13);
+  color: var(--ink);
+  background: var(--background);
+}
+
+.app-shell.dark-mode {
+  --ink: var(--org-dark-text);
+  --ink-soft: #D5E0F0;
+  --muted: var(--org-dark-muted);
+  --line: var(--org-dark-border);
+  --line-dark: #405574;
+  --border: var(--org-dark-border);
+  --text: var(--org-dark-text);
+  --background: var(--org-dark-bg);
+  --panel: var(--org-dark-surface);
+  --surface: var(--org-dark-surface);
+  --surface-2: #14243D;
+  --panel-soft: #14243D;
+  --panel-strong: var(--org-dark-elevated);
+  --hover-surface: #1B3151;
+  --input-surface: #0D192C;
+  --sidebar-surface: #091426;
+  --primary: var(--org-blue);
+  --primary-dark: var(--org-blue-light);
+  --primary-soft: #1B3763;
+  --accent: var(--org-blue);
+  --success: #4CC58A;
+  --success-soft: #153B31;
+  --warning: #F0B85B;
+  --warning-soft: #45351D;
+  --danger: #FF7B88;
+  --danger-soft: #472632;
+  --purple: #B2A0FF;
+  --purple-soft: #302A50;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, .20);
+  --shadow: 0 10px 28px rgba(0, 0, 0, .22);
+  --shadow-lg: 0 22px 58px rgba(0, 0, 0, .34);
+  color: var(--ink);
+  background: var(--background);
+}
+
+html.dark-mode body {
+  background: var(--org-dark-bg);
+  color: var(--org-dark-text);
+}
+
+html.dark-mode .app-shell {
+  background: var(--org-dark-bg);
+}
+
+/* Main canvas and shared page rhythm */
+
+.app-shell .main,
+.app-shell .page {
+  background: transparent;
+  color: var(--ink);
+}
+
+.app-shell .page {
+  padding-top: 27px;
+  padding-bottom: 38px;
+}
+
+.app-shell .welcome,
+.app-shell .page-heading,
+.app-shell .page-head {
+  color: var(--ink);
+}
+
+.app-shell .welcome h2,
+.app-shell .page-heading h2,
+.app-shell .page-head h2 {
+  color: var(--ink);
+  letter-spacing: -.035em;
+}
+
+.app-shell .welcome p,
+.app-shell .page-heading p,
+.app-shell .page-head p {
+  color: var(--muted);
+}
+
+/* Navigation: navy is the product signature in both themes. */
+
+.app-shell .sidebar,
+.app-shell .admin-sidebar {
+  background: var(--org-navy);
+  color: #F3F7FF;
+  border-right: 1px solid rgba(255,255,255,.075);
+  box-shadow: 8px 0 28px rgba(16,29,53,.09);
+}
+
+.app-shell .sidebar .brand b,
+.app-shell .admin-sidebar .brand b,
+.app-shell .sidebar .side-user b,
+.app-shell .admin-sidebar .side-user b {
+  color: #FFFFFF;
+}
+
+.app-shell .sidebar .brand span,
+.app-shell .admin-sidebar .brand span,
+.app-shell .sidebar .side-user span,
+.app-shell .admin-sidebar .side-user span,
+.app-shell .sidebar .side-label,
+.app-shell .admin-sidebar .side-label {
+  color: #A9BBD5;
+}
+
+.app-shell .brand-mark,
+.app-shell .admin-brand-mark {
+  background: rgba(52,120,246,.18);
+  color: #8FC0FF;
+  border: 1px solid rgba(112,183,255,.18);
+}
+
+.app-shell .sidebar nav button,
+.app-shell .admin-sidebar nav button,
+.app-shell .sidebar .logout-btn,
+.app-shell .admin-sidebar .logout-btn {
+  color: #C1CEE0;
+}
+
+.app-shell .sidebar nav button:hover,
+.app-shell .admin-sidebar nav button:hover,
+.app-shell .sidebar .logout-btn:hover,
+.app-shell .admin-sidebar .logout-btn:hover {
+  background: rgba(255,255,255,.075);
+  color: #FFFFFF;
+}
+
+.app-shell .sidebar nav button.active,
+.app-shell .admin-sidebar nav button.active {
+  color: #FFFFFF;
+  background: linear-gradient(90deg, rgba(52,120,246,.30), rgba(52,120,246,.13));
+  box-shadow: inset 3px 0 0 var(--org-blue);
+}
+
+.app-shell .sidebar-collapse-btn,
+.app-shell .admin-sidebar .sidebar-collapse-btn {
+  color: #C1CEE0;
+  background: rgba(255,255,255,.07);
+  border-color: rgba(255,255,255,.14);
+}
+
+.app-shell .sidebar-collapse-btn:hover,
+.app-shell .admin-sidebar .sidebar-collapse-btn:hover {
+  color: #FFFFFF;
+  background: rgba(52,120,246,.22);
+  border-color: rgba(112,183,255,.45);
+}
+
+.app-shell .side-profile,
+.app-shell .logout-btn {
+  border-color: rgba(255,255,255,.12);
+}
+
+.app-shell .avatar {
+  background: rgba(52,120,246,.22);
+  color: #B8D8FF;
+}
+
+.app-shell .admin-role-badge,
+.app-shell .admin-side-summary,
+.app-shell .admin-side-profile {
+  background: rgba(255,255,255,.065);
+  border-color: rgba(255,255,255,.12);
+  color: #D7E4F5;
+}
+
+.app-shell .admin-side-summary b {
+  color: #FFFFFF;
+}
+
+.app-shell .admin-side-summary p,
+.app-shell .admin-side-summary span {
+  color: #A9BBD5;
+}
+
+/* Top bar and controls */
+
+.app-shell .topbar {
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 3px 16px rgba(16,29,53,.035);
+  backdrop-filter: blur(16px);
+}
+
+.app-shell .topbar h1 {
+  color: var(--ink);
+}
+
+.app-shell .topbar p {
+  color: var(--muted);
+}
+
+.app-shell .icon-btn,
+.app-shell .menu-btn,
+.app-shell .theme-toggle,
+.app-shell .sidebar-collapse-btn {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.app-shell .icon-btn:hover,
+.app-shell .menu-btn:hover,
+.app-shell .theme-toggle:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* Panels, dashboard cards, room cards, and admin surfaces */
+
+.app-shell .panel,
+.app-shell .table-panel,
+.app-shell .stat-card,
+.app-shell .quick-card,
+.app-shell .mini-room,
+.app-shell .room-card,
+.app-shell .request-card,
+.app-shell .timeline-card,
+.app-shell .profile-hero,
+.app-shell .modal,
+.app-shell .calendar-summary > div,
+.app-shell .available-now-panel,
+.app-shell .user-create-panel,
+.app-shell .user-list-panel {
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm), 0 8px 22px rgba(16,29,53,.035);
+}
+
+.app-shell .panel h3,
+.app-shell .panel h4,
+.app-shell .room-card h3,
+.app-shell .stat-card strong,
+.app-shell .quick-card b,
+.app-shell .mini-room b,
+.app-shell .request-card b,
+.app-shell .modal h2,
+.app-shell .modal h3,
+.app-shell .profile-hero h2,
+.app-shell table b {
+  color: var(--ink);
+}
+
+.app-shell .panel p,
+.app-shell .panel small,
+.app-shell .room-card p,
+.app-shell .stat-card small,
+.app-shell .quick-card span,
+.app-shell .mini-room span,
+.app-shell .request-card span {
+  color: var(--muted);
+}
+
+.app-shell .panel-head {
+  border-color: var(--line);
+}
+
+.app-shell .panel-head > svg,
+.app-shell .quick-card > svg,
+.app-shell .chev {
+  color: var(--primary);
+}
+
+.app-shell .panel:hover,
+.app-shell .room-card:hover,
+.app-shell .stat-card:hover,
+.app-shell .quick-card:hover,
+.app-shell .mini-room:hover {
+  border-color: color-mix(in srgb, var(--primary) 38%, var(--line));
+  box-shadow: var(--shadow);
+}
+
+.app-shell .stat-icon,
+.app-shell .room-symbol,
+.app-shell .row-icon,
+.app-shell .user-management-icon,
+.app-shell .available-now-icon {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.app-shell .stat-card.blue .stat-icon {
+  background: #EAF1FF;
+  color: #3478F6;
+}
+
+.app-shell .stat-card.green .stat-icon {
+  background: #E8F7EF;
+  color: #168653;
+}
+
+.app-shell .stat-card.orange .stat-icon {
+  background: #FFF4DF;
+  color: #B97712;
+}
+
+.app-shell .stat-card.purple .stat-icon {
+  background: #F0EDFC;
+  color: #7357C8;
+}
+
+/* Buttons: one clear primary action, quieter secondary actions. */
+
+.app-shell .primary-btn,
+.app-shell .auth-submit {
+  color: #FFFFFF;
+  background: var(--org-blue);
+  border-color: var(--org-blue);
+  box-shadow: 0 5px 13px rgba(52,120,246,.20);
+}
+
+.app-shell .primary-btn:hover,
+.app-shell .auth-submit:hover {
+  background: #2868E5;
+  border-color: #2868E5;
+  box-shadow: 0 7px 17px rgba(52,120,246,.25);
+}
+
+.app-shell .outline-btn,
+.app-shell .back-btn,
+.app-shell .today-btn,
+.app-shell .date-nav button {
+  color: var(--ink-soft);
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.app-shell .outline-btn:hover,
+.app-shell .back-btn:hover,
+.app-shell .date-nav button:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+
+.app-shell .text-btn,
+.app-shell .link-button {
+  color: var(--primary);
+}
+
+.app-shell .approve-btn {
+  background: #168653;
+  border-color: #168653;
+  color: #FFFFFF;
+}
+
+.app-shell .reject-btn,
+.app-shell .danger-btn {
+  background: #C83E50;
+  border-color: #C83E50;
+  color: #FFFFFF;
+}
+
+.app-shell button:focus-visible,
+.app-shell a:focus-visible,
+.app-shell input:focus-visible,
+.app-shell select:focus-visible,
+.app-shell textarea:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--org-blue) 42%, transparent);
+  outline-offset: 2px;
+}
+
+/* Inputs and search */
+
+.app-shell input,
+.app-shell select,
+.app-shell textarea,
+.app-shell .search-box input,
+.app-shell .filters select,
+.app-shell .form-stack input,
+.app-shell .form-stack select,
+.app-shell .form-stack textarea,
+.app-shell .form-grid input,
+.app-shell .form-grid select,
+.app-shell .form-grid textarea,
+.app-shell .auth-card input,
+.app-shell .auth-card select,
+.app-shell .auth-card textarea {
+  color: var(--ink);
+  background: var(--input-surface);
+  border-color: var(--line);
+}
+
+.app-shell input::placeholder,
+.app-shell textarea::placeholder {
+  color: var(--muted);
+  opacity: .78;
+}
+
+.app-shell input:focus,
+.app-shell select:focus,
+.app-shell textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 13%, transparent);
+}
+
+.app-shell .global-search-field {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.app-shell .global-search-field input {
+  background: transparent !important;
+  color: var(--ink) !important;
+}
+
+.app-shell .global-search-dropdown,
+.app-shell .global-search-mobile-panel {
+  background: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-shell .global-search-result:hover,
+.app-shell .global-search-result.active {
+  background: var(--hover-surface);
+}
+
+.app-shell .global-search-result-copy b {
+  color: var(--ink);
+}
+
+.app-shell .global-search-result-copy small {
+  color: var(--muted);
+}
+
+/* Tables and administrative lists */
+
+.app-shell table {
+  color: var(--ink);
+}
+
+.app-shell th {
+  color: var(--ink-soft);
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.app-shell td {
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell tbody tr:hover td {
+  background: var(--hover-surface);
+}
+
+.app-shell .user-table-wrap {
+  border-color: var(--line);
+}
+
+.app-shell .user-table th {
+  color: var(--ink-soft);
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.app-shell .user-table td {
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell .user-cell b {
+  color: var(--ink);
+}
+
+.app-shell .user-cell span {
+  color: var(--muted);
+}
+
+/* Calendar and schedule surfaces */
+
+.app-shell .calendar-grid,
+.app-shell .calendar-week,
+.app-shell .calendar-day,
+.app-shell .calendar-cell,
+.app-shell .calendar-facility-header,
+.app-shell .calendar-room-availability,
+.app-shell .schedule-timeline-wrap,
+.app-shell .schedule-block,
+.app-shell .reservation-form-panel,
+.app-shell .reservation-summary-card,
+.app-shell .reminder-admin-status {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell .calendar-facility-header:hover,
+.app-shell .calendar-room-availability:hover {
+  background: var(--hover-surface);
+}
+
+.app-shell .calendar-building-count,
+.app-shell .calendar-building-statuses > span {
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+}
+
+.app-shell .time,
+.app-shell .time span,
+.app-shell .timeline-card {
+  color: var(--ink);
+}
+
+.app-shell .timeline-line:before {
+  background: var(--line);
+}
+
+.app-shell .timeline-line i {
+  background: var(--primary);
+}
+
+.app-shell .schedule-legend {
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.app-shell .schedule-legend span {
+  color: var(--ink-soft);
+}
+
+.app-shell .schedule-timeline {
+  background: var(--panel-strong);
+  border-color: var(--line);
+}
+
+.app-shell .schedule-block {
+  background: var(--panel);
+}
+
+.app-shell .schedule-block b {
+  color: var(--ink);
+}
+
+.app-shell .schedule-block span,
+.app-shell .schedule-block small {
+  color: var(--muted);
+}
+
+.app-shell .calendar-instructor-search-match {
+  background: var(--panel);
+  border-color: var(--line);
+  border-left-color: var(--primary);
+  color: var(--ink);
+}
+
+/* Room and facility presentation: campus-oriented neutral image fallback. */
+
+.app-shell .room-top,
+.app-shell .facility-image,
+.app-shell .building-image,
+.app-shell .room-image,
+.app-shell .room-visual,
+.app-shell .facility-visual {
+  background-color: var(--panel-strong);
+  background-image: linear-gradient(135deg, rgba(52,120,246,.12), rgba(112,183,255,.05));
+  border-color: var(--line);
+}
+
+.app-shell .amenities span,
+.app-shell .request-tabs button span {
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell .request-tabs button {
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.app-shell .request-tabs button.active {
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+}
+
+/* Status semantics stay separate from the blue brand. */
+
+.app-shell .status.available,
+.app-shell .status.approved,
+.app-shell .status.scheduled {
+  color: #126B43;
+  background: #E4F6EC;
+  border-color: #BCE7CE;
+}
+
+.app-shell .status.pending {
+  color: #875A08;
+  background: #FFF2D7;
+  border-color: #F2D99D;
+}
+
+.app-shell .status.reserved {
+  color: #245FCB;
+  background: #E8F0FF;
+  border-color: #C9D9FF;
+}
+
+.app-shell .status.rejected {
+  color: #A52E40;
+  background: #FDECEF;
+  border-color: #F4C7CE;
+}
+
+.app-shell .status.admin {
+  color: #245FCB;
+  background: #E8F0FF;
+}
+
+.app-shell .status.teacher {
+  color: #126B43;
+  background: #E4F6EC;
+}
+
+.app-shell .alert.success {
+  color: #126B43;
+  background: #E8F7EF;
+  border-color: #BCE7CE;
+}
+
+.app-shell .alert.danger,
+.app-shell .global-error {
+  color: #A52E40;
+  background: #FDECEF;
+  border-color: #F4C7CE;
+}
+
+/* Modals, dropdowns, notifications, and profile/settings. */
+
+.app-shell .modal-backdrop {
+  background: rgba(7,17,34,.62);
+  backdrop-filter: blur(5px);
+}
+
+.app-shell .modal {
+  background: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-shell .modal-close {
+  color: var(--muted);
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.app-shell .modal-close:hover {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.app-shell .notification-panel {
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-shell .notification-item {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell .notification-item:hover,
+.app-shell .notification-item.unread {
+  background: var(--hover-surface);
+}
+
+.app-shell .detail-note,
+.app-shell .access-list > div,
+.app-shell .detail-grid > div,
+.app-shell .list-row {
+  background: var(--panel-soft);
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+
+.app-shell .reservation-timer {
+  background: var(--panel-soft);
+  border-color: var(--line);
+}
+
+.app-shell .reservation-toast {
+  background: var(--panel);
+  color: var(--ink);
+  border-color: var(--line);
+  box-shadow: var(--shadow-lg);
+}
+
+.app-shell .reservation-toast-copy b {
+  color: var(--ink);
+}
+
+.app-shell .reservation-toast-copy span {
+  color: var(--muted);
+}
+
+/* Login: keep the existing split-screen and all authentication forms. */
+
+.auth-page {
+  background: var(--org-light-bg);
+}
+
+.auth-art {
+  color: #FFFFFF;
+  background: radial-gradient(circle at 82% 16%, rgba(112,183,255,.20), transparent 34%), linear-gradient(145deg, #101D35 0%, #142A4B 58%, #1C3155 100%);
+}
+
+.auth-art .brand-mark {
+  color: #B9D9FF;
+  background: rgba(52,120,246,.20);
+  border: 1px solid rgba(112,183,255,.22);
+}
+
+.auth-art .brand b {
+  color: #FFFFFF;
+}
+
+.auth-art .brand span,
+.auth-art .art-copy p,
+.auth-art .art-stats span {
+  color: #B2C3DA;
+}
+
+.auth-art .art-copy em {
+  color: var(--org-blue-light);
+}
+
+.auth-art .art-stats div {
+  background: rgba(255,255,255,.045);
+  border-color: rgba(255,255,255,.15);
+}
+
+.auth-card {
+  background: #FFFFFF;
+  color: var(--org-text);
+}
+
+.auth-card h1,
+.auth-card h2,
+.auth-card h3,
+.auth-head h2 {
+  color: var(--org-text);
+}
+
+.auth-card p,
+.auth-card span,
+.auth-card label,
+.auth-head p,
+.auth-switch {
+  color: var(--org-muted);
+}
+
+.auth-card input,
+.auth-card select,
+.auth-card textarea {
+  background: #F7FAFF;
+  color: var(--org-text);
+  border-color: var(--org-border);
+}
+
+.auth-card input:focus,
+.auth-card select:focus,
+.auth-card textarea:focus {
+  border-color: var(--org-blue);
+  box-shadow: 0 0 0 3px rgba(52,120,246,.13);
+}
+
+.auth-card .input-icon > svg {
+  color: var(--org-muted);
+}
+
+.auth-switch button,
+.auth-card .link-button {
+  color: var(--org-blue);
+}
+
+html.dark-mode .auth-page {
+  background: var(--org-dark-bg);
+}
+
+html.dark-mode .auth-card {
+  background: var(--org-dark-surface);
+  color: var(--org-dark-text);
+}
+
+html.dark-mode .auth-card h1,
+html.dark-mode .auth-card h2,
+html.dark-mode .auth-card h3,
+html.dark-mode .auth-head h2 {
+  color: var(--org-dark-text);
+}
+
+html.dark-mode .auth-card p,
+html.dark-mode .auth-card span,
+html.dark-mode .auth-card label,
+html.dark-mode .auth-head p,
+html.dark-mode .auth-switch {
+  color: var(--org-dark-muted);
+}
+
+html.dark-mode .auth-card input,
+html.dark-mode .auth-card select,
+html.dark-mode .auth-card textarea {
+  background: #0D192C;
+  color: var(--org-dark-text);
+  border-color: var(--org-dark-border);
+}
+
+html.dark-mode .auth-card input::placeholder,
+html.dark-mode .auth-card textarea::placeholder {
+  color: #8295B0;
+}
+
+html.dark-mode .auth-card .input-icon > svg {
+  color: var(--org-dark-muted);
+}
+
+/* Dark mode: ensure every shared surface follows the navy palette. */
+
+.app-shell.dark-mode .topbar,
+.app-shell.dark-mode .panel,
+.app-shell.dark-mode .table-panel,
+.app-shell.dark-mode .stat-card,
+.app-shell.dark-mode .quick-card,
+.app-shell.dark-mode .mini-room,
+.app-shell.dark-mode .room-card,
+.app-shell.dark-mode .request-card,
+.app-shell.dark-mode .timeline-card,
+.app-shell.dark-mode .profile-hero,
+.app-shell.dark-mode .modal,
+.app-shell.dark-mode .notification-panel,
+.app-shell.dark-mode .notification-item,
+.app-shell.dark-mode .calendar-summary > div,
+.app-shell.dark-mode .available-now-panel,
+.app-shell.dark-mode .user-create-panel,
+.app-shell.dark-mode .user-list-panel {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .sidebar,
+.app-shell.dark-mode .admin-sidebar {
+  background: #091426;
+}
+
+.app-shell.dark-mode input,
+.app-shell.dark-mode select,
+.app-shell.dark-mode textarea {
+  background: var(--input-surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode th {
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell.dark-mode td {
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell.dark-mode tbody tr:hover td {
+  background: var(--hover-surface);
+}
+
+.app-shell.dark-mode .outline-btn,
+.app-shell.dark-mode .back-btn,
+.app-shell.dark-mode .today-btn,
+.app-shell.dark-mode .date-nav button,
+.app-shell.dark-mode .icon-btn,
+.app-shell.dark-mode .menu-btn,
+.app-shell.dark-mode .theme-toggle {
+  background: var(--panel);
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.app-shell.dark-mode .outline-btn:hover,
+.app-shell.dark-mode .back-btn:hover,
+.app-shell.dark-mode .date-nav button:hover {
+  background: var(--primary-soft);
+  color: var(--org-blue-light);
+  border-color: var(--primary);
+}
+
+.app-shell.dark-mode .status.available,
+.app-shell.dark-mode .status.approved,
+.app-shell.dark-mode .status.scheduled {
+  color: #8DE0B2;
+  background: #153B31;
+  border-color: #28664D;
+}
+
+.app-shell.dark-mode .status.pending {
+  color: #FFD27D;
+  background: #45351D;
+  border-color: #715628;
+}
+
+.app-shell.dark-mode .status.reserved {
+  color: #B7D3FF;
+  background: #1B3763;
+  border-color: #315B94;
+}
+
+.app-shell.dark-mode .status.rejected {
+  color: #FFADB6;
+  background: #472632;
+  border-color: #7B3B4C;
+}
+
+.app-shell.dark-mode .status.admin {
+  color: #B7D3FF;
+  background: #1B3763;
+}
+
+.app-shell.dark-mode .status.teacher {
+  color: #8DE0B2;
+  background: #153B31;
+}
+
+.app-shell.dark-mode .alert.success {
+  color: #8DE0B2;
+  background: #153B31;
+  border-color: #28664D;
+}
+
+.app-shell.dark-mode .alert.danger,
+.app-shell.dark-mode .global-error {
+  color: #FFADB6;
+  background: #472632;
+  border-color: #7B3B4C;
+}
+
+.app-shell.dark-mode .reservation-availability-result.available {
+  background: #153B31;
+  border-color: #28664D;
+  color: #8DE0B2;
+}
+
+.app-shell.dark-mode .reservation-availability-result.unavailable {
+  background: #472632;
+  border-color: #7B3B4C;
+  color: #FFADB6;
+}
+
+.app-shell.dark-mode .schedule-segment.available {
+  background: #205C45;
+  color: #D2F7E2;
+}
+
+.app-shell.dark-mode .schedule-segment.occupied {
+  background: #713A48;
+  color: #FFE1E5;
+}
+
+.app-shell.dark-mode .schedule-segment.pending {
+  background: #72551F;
+  color: #FFF0C8;
+}
+
+.app-shell.dark-mode .schedule-state-dot.available {
+  color: #70D5A1;
+  background: #205C45;
+}
+
+.app-shell.dark-mode .schedule-state-dot.occupied {
+  color: #FF8997;
+  background: #713A48;
+}
+
+.app-shell.dark-mode .schedule-state-dot.pending {
+  color: #F0C36C;
+  background: #72551F;
+}
+
+.app-shell.dark-mode .stat-card.blue .stat-icon,
+.app-shell.dark-mode .stat-card.green .stat-icon,
+.app-shell.dark-mode .stat-card.orange .stat-icon,
+.app-shell.dark-mode .stat-card.purple .stat-icon {
+  background: var(--panel-strong);
+  color: var(--org-blue-light);
+}
+
+.app-shell.dark-mode .room-symbol,
+.app-shell.dark-mode .row-icon,
+.app-shell.dark-mode .user-management-icon,
+.app-shell.dark-mode .available-now-icon {
+  background: var(--primary-soft);
+  color: var(--org-blue-light);
+}
+
+.app-shell.dark-mode .room-top,
+.app-shell.dark-mode .facility-image,
+.app-shell.dark-mode .building-image,
+.app-shell.dark-mode .room-image,
+.app-shell.dark-mode .room-visual,
+.app-shell.dark-mode .facility-visual {
+  background-color: var(--panel-strong);
+  background-image: linear-gradient(135deg, rgba(52,120,246,.20), rgba(112,183,255,.07));
+  border-color: var(--line);
+}
+
+.app-shell.dark-mode .schedule-timeline {
+  background: #0D192C;
+  border-color: var(--line);
+}
+
+.app-shell.dark-mode .schedule-block,
+.app-shell.dark-mode .schedule-timeline-wrap,
+.app-shell.dark-mode .schedule-legend,
+.app-shell.dark-mode .reservation-form-panel,
+.app-shell.dark-mode .reservation-summary-card,
+.app-shell.dark-mode .reminder-admin-status {
+  background: var(--panel-soft);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .calendar-instructor-search-match {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .global-search-field,
+.app-shell.dark-mode .global-search-dropdown,
+.app-shell.dark-mode .global-search-mobile-panel {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .global-search-result:hover,
+.app-shell.dark-mode .global-search-result.active {
+  background: var(--hover-surface);
+}
+
+.app-shell.dark-mode .global-search-result-copy b {
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .global-search-result-copy small {
+  color: var(--muted);
+}
+
+.app-shell.dark-mode .reservation-toast {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+/* Responsive refinements: preserve existing mobile navigation behavior. */
+
+@media (max-width: 1100px) {
+  .app-shell .page {
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+}
+
+@media (max-width: 800px) {
+  .app-shell .topbar {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .app-shell .page {
+    padding: 22px 18px 32px;
+  }
+
+  .auth-page {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-art {
+    min-height: 290px;
+    padding: 30px 7%;
+  }
+
+  .auth-art .art-copy {
+    margin: 34px 0 18px;
+  }
+
+  .auth-art .art-copy h1 {
+    font-size: clamp(30px, 7vw, 42px);
+  }
+
+  .auth-card {
+    padding: 36px max(7%, calc((100% - 480px)/2));
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell .topbar {
+    min-height: 64px;
+    height: auto;
+    padding: 10px 12px;
+    gap: 9px;
+  }
+
+  .app-shell .page {
+    padding: 18px 12px 28px;
+  }
+
+  .app-shell .welcome h2,
+  .app-shell .page-heading h2,
+  .app-shell .page-head h2 {
+    font-size: 21px;
+  }
+
+  .app-shell .panel,
+  .app-shell .table-panel,
+  .app-shell .room-card,
+  .app-shell .request-card {
+    border-radius: 14px;
+  }
+
+  .auth-art {
+    min-height: 245px;
+    padding: 24px 22px;
+  }
+
+  .auth-art .art-stats {
+    flex-wrap: wrap;
+  }
+
+  .auth-art .art-stats div {
+    min-width: 0;
+    flex: 1 1 105px;
+  }
+
+  .auth-card {
+    padding: 28px 22px 34px;
+  }
+
+  .app-shell .reservation-smart-modal {
+    width: 100%;
+    padding: 15px;
+  }
+
+  .app-shell .reservation-smart-layout {
+    grid-template-columns: minmax(0,1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .auth-page * {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* Specificity bridge for the existing Light Mode polish selectors. */
+
+html:not(.dark-mode) .app-shell .sidebar,
+html:not(.dark-mode) .app-shell .admin-sidebar {
+  background: var(--org-navy);
+  color: #F3F7FF;
+  border-right-color: rgba(255,255,255,.075);
+}
+
+html:not(.dark-mode) .app-shell .sidebar .brand b,
+html:not(.dark-mode) .app-shell .admin-sidebar .brand b,
+html:not(.dark-mode) .app-shell .sidebar .side-user b,
+html:not(.dark-mode) .app-shell .admin-sidebar .side-user b {
+  color: #FFFFFF;
+}
+
+html:not(.dark-mode) .app-shell .sidebar .brand span,
+html:not(.dark-mode) .app-shell .admin-sidebar .brand span,
+html:not(.dark-mode) .app-shell .sidebar .side-user span,
+html:not(.dark-mode) .app-shell .admin-sidebar .side-user span,
+html:not(.dark-mode) .app-shell .sidebar .side-label,
+html:not(.dark-mode) .app-shell .admin-sidebar .side-label {
+  color: #A9BBD5;
+}
+
+html:not(.dark-mode) .app-shell .sidebar nav button,
+html:not(.dark-mode) .app-shell .admin-sidebar nav button,
+html:not(.dark-mode) .app-shell .sidebar .logout-btn,
+html:not(.dark-mode) .app-shell .admin-sidebar .logout-btn {
+  color: #C1CEE0;
+}
+
+html:not(.dark-mode) .app-shell .sidebar nav button:hover,
+html:not(.dark-mode) .app-shell .admin-sidebar nav button:hover {
+  background: rgba(255,255,255,.075);
+  color: #FFFFFF;
+}
+
+html:not(.dark-mode) .app-shell .sidebar nav button.active,
+html:not(.dark-mode) .app-shell .admin-sidebar nav button.active {
+  background: linear-gradient(90deg, rgba(52,120,246,.30), rgba(52,120,246,.13));
+  color: #FFFFFF;
+  box-shadow: inset 3px 0 0 var(--org-blue);
+}
+
+html:not(.dark-mode) .app-shell .sidebar-collapse-btn,
+html:not(.dark-mode) .app-shell .admin-sidebar .sidebar-collapse-btn {
+  background: rgba(255,255,255,.07);
+  color: #C1CEE0;
+  border-color: rgba(255,255,255,.14);
+}
+
+html:not(.dark-mode) .app-shell .admin-role-badge,
+html:not(.dark-mode) .app-shell .admin-side-summary,
+html:not(.dark-mode) .app-shell .admin-side-profile {
+  background: rgba(255,255,255,.065);
+  border-color: rgba(255,255,255,.12);
+  color: #D7E4F5;
+}
+
+html:not(.dark-mode) .app-shell .admin-side-summary b {
+  color: #FFFFFF;
+}
+
+html:not(.dark-mode) .app-shell .admin-side-summary p,
+html:not(.dark-mode) .app-shell .admin-side-summary span {
+  color: #A9BBD5;
+}
+
+html:not(.dark-mode) .app-shell .primary-btn,
+html:not(.dark-mode) .app-shell .auth-submit {
+  color: #FFFFFF;
+  background: var(--org-blue);
+  border-color: var(--org-blue);
+}
+
+html:not(.dark-mode) .app-shell .primary-btn:hover,
+html:not(.dark-mode) .app-shell .auth-submit:hover {
+  background: #2868E5;
+  border-color: #2868E5;
+}
+
+html:not(.dark-mode) .app-shell .outline-btn,
+html:not(.dark-mode) .app-shell .back-btn,
+html:not(.dark-mode) .app-shell .date-nav button {
+  color: var(--org-text);
+  background: #FFFFFF;
+  border-color: var(--org-border);
+}
+
+html:not(.dark-mode) .app-shell .outline-btn:hover,
+html:not(.dark-mode) .app-shell .back-btn:hover,
+html:not(.dark-mode) .app-shell .date-nav button:hover {
+  color: var(--org-blue);
+  background: #EAF1FF;
+  border-color: var(--org-blue);
+}
+
+html:not(.dark-mode) .app-shell .status.available,
+html:not(.dark-mode) .app-shell .status.approved,
+html:not(.dark-mode) .app-shell .status.scheduled {
+  color: #126B43;
+  background: #E4F6EC;
+  border-color: #BCE7CE;
+}
+
+html:not(.dark-mode) .app-shell .status.pending {
+  color: #875A08;
+  background: #FFF2D7;
+  border-color: #F2D99D;
+}
+
+html:not(.dark-mode) .app-shell .status.reserved {
+  color: #245FCB;
+  background: #E8F0FF;
+  border-color: #C9D9FF;
+}
+
+html:not(.dark-mode) .app-shell .status.rejected {
+  color: #A52E40;
+  background: #FDECEF;
+  border-color: #F4C7CE;
+}
+
+html:not(.dark-mode) .app-shell .status.admin {
+  color: #245FCB;
+  background: #E8F0FF;
+}
+
+html:not(.dark-mode) .app-shell .status.teacher {
+  color: #126B43;
+  background: #E4F6EC;
+}
+
+html:not(.dark-mode) .auth-page {
+  background: var(--org-light-bg);
+}
+
+html:not(.dark-mode) .auth-art {
+  background: radial-gradient(circle at 82% 16%, rgba(112,183,255,.20), transparent 34%), linear-gradient(145deg, #101D35 0%, #142A4B 58%, #1C3155 100%);
+  color: #FFFFFF;
+}
+
+html:not(.dark-mode) .auth-art .brand span,
+html:not(.dark-mode) .auth-art .art-copy p,
+html:not(.dark-mode) .auth-art .art-stats span {
+  color: #B2C3DA;
+}
+
+html:not(.dark-mode) .auth-art .art-copy em {
+  color: var(--org-blue-light);
+}
+
+html:not(.dark-mode) .auth-art .art-stats div {
+  background: rgba(255,255,255,.045);
+  border-color: rgba(255,255,255,.15);
+}
+
+html:not(.dark-mode) .auth-card {
+  background: #FFFFFF;
+  color: var(--org-text);
+  border-left-color: var(--org-border);
+}
+
+html:not(.dark-mode) .auth-head h2,
+html:not(.dark-mode) .auth-card h1,
+html:not(.dark-mode) .auth-card h2,
+html:not(.dark-mode) .auth-card h3 {
+  color: var(--org-text);
+}
+
+html:not(.dark-mode) .auth-head p,
+html:not(.dark-mode) .auth-switch,
+html:not(.dark-mode) .auth-card p,
+html:not(.dark-mode) .auth-card span,
+html:not(.dark-mode) .auth-card label {
+  color: var(--org-muted);
+}
+
+html:not(.dark-mode) .auth-card input,
+html:not(.dark-mode) .auth-card select,
+html:not(.dark-mode) .auth-card textarea {
+  background: #F7FAFF;
+  color: var(--org-text);
+  border-color: var(--org-border);
+}
+
+html:not(.dark-mode) .auth-card input:focus,
+html:not(.dark-mode) .auth-card select:focus,
+html:not(.dark-mode) .auth-card textarea:focus {
+  border-color: var(--org-blue);
+  box-shadow: 0 0 0 3px rgba(52,120,246,.13);
+}
+
+html:not(.dark-mode) .auth-switch button,
+html:not(.dark-mode) .auth-card .link-button {
+  color: var(--org-blue);
+}
+/* ============================================================
+   DATABASE-DRIVEN ROOM BROWSER + REPLACEABLE IMAGE PLACEHOLDERS
+   ============================================================ */
+
+.room-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 18px;
+}
+
+.room-browser-toolbar .search-box {
+  flex: 1;
+  min-width: 220px;
+}
+
+.room-browser-toolbar .search-box input {
+  width: 100%;
+}
+
+.room-browser-toolbar-selected {
+  flex-wrap: wrap;
+}
+
+.room-browser-toolbar-selected .search-box {
+  flex: 1 1 260px;
+}
+
+.room-browser-toolbar-selected select {
+  min-width: 160px;
+}
+
+.room-back-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.room-back-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.room-back-button:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.building-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 13px;
+}
+
+.building-picker-card {
+  display: grid;
+  grid-template-columns: 46px minmax(0,1fr) auto 18px;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  box-shadow: var(--shadow-sm);
+  transition: transform .16s ease,border-color .16s ease,box-shadow .16s ease;
+}
+
+.building-picker-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: var(--shadow);
+}
+
+.building-picker-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb,var(--primary) 18%,var(--line));
+  border-radius: 13px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.building-picker-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.building-picker-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.building-picker-copy strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.building-picker-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.building-picker-availability {
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: var(--success-soft);
+  color: var(--success);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.building-picker-card>svg:last-child {
+  width: 17px;
+  height: 17px;
+  color: var(--muted);
+}
+
+.selected-building-banner {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: 0 0 18px;
+  padding: 15px 17px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+}
+
+.selected-building-banner h3 {
+  margin: 3px 0 2px;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.selected-building-banner p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.room-grid-with-images {
+  grid-template-columns: repeat(3,minmax(0,1fr));
+}
+
+.room-card {
+  min-width: 0;
+}
+
+.room-photo {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: linear-gradient(135deg,#EAF2FC,#D7E6F8);
+  isolation: isolate;
+}
+
+.room-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.room-photo-label {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 2;
+  max-width: calc(100% - 20px);
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 999px;
+  background: rgba(16,29,53,.86);
+  color: #FFFFFF;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.room-photo-watermark {
+  position: absolute;
+  right: 11px;
+  top: 10px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 9px;
+  background: rgba(16,29,53,.55);
+  color: #FFFFFF;
+}
+
+.room-photo-watermark svg {
+  width: 15px;
+  height: 15px;
+}
+
+.room-photo-fallback {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 100px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(135deg,#EAF2FC,#D7E6F8);
+  color: #1C3155;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.room-photo-fallback svg {
+  width: 28px;
+  height: 28px;
+}
+
+.room-card-photo {
+  flex: 0 0 auto;
+}
+
+.room-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.room-card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.room-card-title-row h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.room-card-title-row .status {
+  flex: 0 0 auto;
+}
+
+.room-body>p {
+  min-height: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.room-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 13px;
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.room-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.room-meta svg {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--primary);
+}
+
+.room-select-action {
+  margin-top: auto;
+}
+
+.available-now-card {
+  grid-template-columns: 62px minmax(0,1fr) auto 16px;
+}
+
+.available-now-photo {
+  width: 62px;
+  height: 50px;
+  aspect-ratio: auto;
+  border-radius: 9px;
+}
+
+.available-now-photo .room-photo-label {
+  left: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  font-size: 6px;
+}
+
+.available-now-photo .room-photo-watermark {
+  display: none;
+}
+
+.reservation-room-hero {
+  align-items: center;
+}
+
+.reservation-room-photo {
+  width: 150px;
+  height: 92px;
+  flex: 0 0 150px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reservation-room-photo .room-photo-label {
+  font-size: 7px;
+}
+
+.app-shell.dark-mode .building-picker-card,
+.app-shell.dark-mode .selected-building-banner,
+.app-shell.dark-mode .room-back-button {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .building-picker-card:hover,
+.app-shell.dark-mode .room-back-button:hover {
+  background: var(--hover-surface);
+  border-color: var(--primary);
+}
+
+.app-shell.dark-mode .building-picker-copy strong,
+.app-shell.dark-mode .selected-building-banner h3 {
+  color: var(--ink);
+}
+
+.app-shell.dark-mode .building-picker-copy small,
+.app-shell.dark-mode .selected-building-banner p {
+  color: var(--muted);
+}
+
+.app-shell.dark-mode .room-photo {
+  background: linear-gradient(135deg,#172B47,#243F63);
+}
+
+.app-shell.dark-mode .room-photo-fallback {
+  background: linear-gradient(135deg,#172B47,#243F63);
+  color: #D9E9FF;
+}
+
+@media(max-width:1050px) {
+  .room-grid-with-images {
+    grid-template-columns: repeat(2,minmax(0,1fr));
+  }
+
+  .building-picker-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media(max-width:700px) {
+  .room-browser-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .room-browser-toolbar .search-box {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .room-browser-toolbar-selected select {
+    width: 100%;
+  }
+
+  .room-grid-with-images {
+    grid-template-columns: 1fr;
+  }
+
+  .building-picker-card {
+    grid-template-columns: 42px minmax(0,1fr) auto;
+    gap: 10px;
+    padding: 13px;
+  }
+
+  .building-picker-icon {
+    width: 42px;
+    height: 42px;
+  }
+
+  .building-picker-card>svg:last-child {
+    display: none;
+  }
+
+  .building-picker-availability {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .selected-building-banner {
+    align-items: flex-start;
+  }
+
+  .available-now-card {
+    grid-template-columns: 58px minmax(0,1fr) auto;
+  }
+
+  .available-now-card>svg:last-child {
+    display: none;
+  }
+
+  .available-now-photo {
+    width: 58px;
+    height: 48px;
+  }
+
+  .reservation-room-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .reservation-room-photo {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16/9;
+    flex: 1 0 100%;
+  }
+}
+
+/* Room thumbnails used in reservation history, admin review, and search. */
+
+.reservation-list-room-photo {
+  width: 76px;
+  height: 62px;
+  flex: 0 0 76px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.reservation-list-room-photo .room-photo-label {
+  left: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  font-size: 6px;
+}
+
+.reservation-list-room-photo .room-photo-watermark {
+  display: none;
+}
+
+.reservation-detail-room-photo {
+  width: 142px;
+  height: 94px;
+  flex: 0 0 142px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reservation-detail-room-photo .room-photo-label {
+  font-size: 7px;
+}
+
+.admin-request-room-photo {
+  width: 78px;
+  height: 60px;
+  flex: 0 0 78px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.admin-request-room-photo .room-photo-label {
+  left: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  font-size: 6px;
+}
+
+.admin-request-room-photo .room-photo-watermark {
+  display: none;
+}
+
+.usage-room-photo {
+  width: 66px;
+  height: 52px;
+  flex: 0 0 66px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.usage-room-photo .room-photo-label {
+  left: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  font-size: 6px;
+}
+
+.usage-room-photo .room-photo-watermark {
+  display: none;
+}
+
+.global-search-room-image {
+  width: 48px;
+  height: 36px;
+  flex: 0 0 48px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.global-search-room-image .room-photo-label {
+  left: 2px;
+  bottom: 2px;
+  padding: 1px 3px;
+  font-size: 5px;
+}
+
+.global-search-room-image .room-photo-watermark {
+  display: none;
+}
+
+.app-shell.dark-mode .reservation-list-room-photo,
+.app-shell.dark-mode .reservation-detail-room-photo,
+.app-shell.dark-mode .admin-request-room-photo,
+.app-shell.dark-mode .usage-room-photo,
+.app-shell.dark-mode .global-search-room-image {
+  border-color: var(--line);
+}
+
+@media(max-width:640px) {
+  .reservation-list-room-photo {
+    width: 64px;
+    height: 54px;
+    flex-basis: 64px;
+  }
+
+  .reservation-detail-room-photo {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16/9;
+    flex: 1 0 100%;
+  }
+
+  .admin-request-room-photo {
+    width: 64px;
+    height: 52px;
+    flex-basis: 64px;
+  }
+
+  .usage-room-photo {
+    width: 58px;
+    height: 48px;
+    flex-basis: 58px;
+  }
+}
+
+.calendar-room-photo {
+  width: 66px;
+  height: 48px;
+  flex: 0 0 66px;
+  aspect-ratio: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.calendar-room-photo .room-photo-label {
+  left: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  font-size: 6px;
+}
+
+.calendar-room-photo .room-photo-watermark {
+  display: none;
+}
+
+@media(max-width:650px) {
+  .calendar-room-photo {
+    width: 58px;
+    height: 44px;
+    flex-basis: 58px;
+  }
+}
+
+
+/* ============================================================
+   FLOATING TEACHER-TO-ADMIN CHAT
+   ============================================================ */
+.orgchat-fab{
+  position:fixed;right:28px;bottom:28px;z-index:1200;width:62px;height:62px;border:0;border-radius:50%;
+  display:grid;place-items:center;background:#087cf0;color:#fff;box-shadow:0 12px 30px rgba(16,29,53,.28);
+  cursor:pointer;transition:transform .18s ease,box-shadow .18s ease;
+}
+.orgchat-fab:hover{transform:translateY(-3px);box-shadow:0 16px 34px rgba(16,29,53,.34)}
+.orgchat-fab-badge{position:absolute;right:-5px;top:-5px;min-width:25px;height:25px;padding:0 6px;border:3px solid #fff;border-radius:99px;background:#f0182d;color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center;line-height:1}
+.orgchat-panel{position:fixed;right:26px;bottom:104px;z-index:1199;width:min(820px,calc(100vw - 40px));height:min(610px,calc(100dvh - 145px));min-height:390px;display:flex;flex-direction:column;overflow:hidden;border:1px solid #d7e1f0;border-radius:20px;background:#f7f9fd;color:#17243b;box-shadow:0 24px 70px rgba(8,25,54,.28)}
+.orgchat-panel.is-dark{background:#111d31;color:#e7eefb;border-color:#2b3d59}
+.orgchat-header{height:66px;flex:0 0 66px;display:flex;align-items:center;gap:11px;padding:0 16px;background:#101d35;color:#fff}
+.orgchat-header-icon{width:38px;height:38px;border-radius:12px;background:#3478f6;display:grid;place-items:center}
+.orgchat-header-title{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+.orgchat-header-title b{font-size:14px}
+.orgchat-header-title span{font-size:11px;color:#b8c8e2}
+.orgchat-sound,.orgchat-close{width:34px;height:34px;border:0;border-radius:10px;background:rgba(255,255,255,.1);color:#fff;display:grid;place-items:center;cursor:pointer}
+.orgchat-sound:hover,.orgchat-close:hover{background:rgba(255,255,255,.2)}
+.orgchat-body{display:flex;flex:1;min-height:0}
+.orgchat-inbox{width:270px;flex:0 0 270px;display:flex;flex-direction:column;overflow:auto;background:#edf2fa;border-right:1px solid #dbe4f1}
+.is-dark .orgchat-inbox{background:#17263d;border-color:#30425d}
+.orgchat-inbox-title{height:48px;flex:0 0 48px;padding:15px 14px 10px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#61718b;display:flex;justify-content:space-between}
+.is-dark .orgchat-inbox-title{color:#a9bad4}
+.orgchat-inbox-title span{background:#dce7f7;border-radius:20px;padding:1px 7px;color:#28436a}
+.orgchat-conversation{width:100%;min-height:70px;border:0;border-bottom:1px solid #dfe7f2;background:transparent;display:flex;align-items:center;gap:9px;padding:10px;text-align:left;cursor:pointer;color:inherit}
+.orgchat-conversation:hover,.orgchat-conversation.active{background:#dfeaff}
+.is-dark .orgchat-conversation{border-color:#2b3d59}
+.is-dark .orgchat-conversation:hover,.is-dark .orgchat-conversation.active{background:#233a5c}
+.orgchat-avatar{width:36px;height:36px;flex:0 0 36px;border-radius:50%;display:grid;place-items:center;background:#3478f6;color:#fff;font-size:11px;font-weight:800}
+.orgchat-conversation-copy{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
+.orgchat-conversation-copy b{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orgchat-conversation-copy small{font-size:11px;color:#687993;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.is-dark .orgchat-conversation-copy small{color:#a6b7d0}
+.orgchat-conversation-meta{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.orgchat-conversation-meta i{font-style:normal;background:#ef233c;color:#fff;border-radius:20px;padding:2px 6px;font-size:10px;font-weight:800}
+.orgchat-conversation-meta small{font-size:10px;color:#74839a}
+.orgchat-empty-small{padding:18px 14px;font-size:12px;color:#74839a;line-height:1.5}
+.orgchat-thread{display:flex;flex:1;min-width:0;flex-direction:column;background:#f8faff}
+.is-dark .orgchat-thread{background:#111d31}
+.orgchat-thread-back{padding:8px 14px 0}
+.orgchat-thread-back button{border:0;background:none;color:#3478f6;font-size:11px;font-weight:700;display:flex;align-items:center;gap:3px;cursor:pointer}
+.orgchat-thread-heading{min-height:57px;flex:0 0 auto;padding:10px 16px;border-bottom:1px solid #e3eaf4;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.is-dark .orgchat-thread-heading{border-color:#2b3d59}
+.orgchat-thread-heading>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.orgchat-thread-heading b{font-size:13px}
+.orgchat-thread-heading span{font-size:11px;color:#74839a}
+.is-dark .orgchat-thread-heading span{color:#a9bad4}
+.orgchat-thread-heading .orgchat-unread-label{white-space:nowrap;background:#ffedf0;color:#d71935;padding:4px 8px;border-radius:20px;font-weight:800}
+.orgchat-messages{flex:1;min-height:0;overflow-y:auto;padding:18px 16px;display:flex;flex-direction:column;gap:11px}
+.orgchat-message-row{max-width:82%;display:flex;flex-direction:column;gap:4px}
+.orgchat-message-row.mine{align-self:flex-end;align-items:flex-end}
+.orgchat-message-row.theirs{align-self:flex-start;align-items:flex-start}
+.orgchat-sender{font-size:10px;color:#70819a;padding:0 4px}
+.orgchat-bubble{padding:10px 13px;border-radius:15px;background:#e7edf6;color:#263852;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.orgchat-message-row.mine .orgchat-bubble{background:#3478f6;color:#fff;border-bottom-right-radius:5px}
+.orgchat-message-row.theirs .orgchat-bubble{border-bottom-left-radius:5px}
+.is-dark .orgchat-bubble{background:#243650;color:#e4edfa}
+.is-dark .orgchat-message-row.mine .orgchat-bubble{background:#3478f6;color:#fff}
+.orgchat-message-row time{font-size:9px;color:#8391a6;padding:0 4px}
+.orgchat-empty,.orgchat-loading{flex:1;min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;text-align:center;color:#7c8ca3;font-size:12px;padding:24px}
+.orgchat-empty svg{color:#3478f6}
+.orgchat-empty b{color:#3a4c66;font-size:13px}
+.is-dark .orgchat-empty b{color:#dce8fa}
+.orgchat-compose{flex:0 0 auto;display:flex;align-items:flex-end;gap:8px;padding:12px 12px 6px;border-top:1px solid #e3eaf4;background:#fff}
+.is-dark .orgchat-compose{background:#17263d;border-color:#2b3d59}
+.orgchat-compose textarea{flex:1;min-width:0;max-height:110px;min-height:40px;resize:vertical;border:1px solid #d7e1ef;border-radius:12px;padding:10px 12px;background:#f8faff;color:#17243b;font:inherit;font-size:12px;outline:none}
+.orgchat-compose textarea:focus{border-color:#3478f6;box-shadow:0 0 0 3px rgba(52,120,246,.12)}
+.is-dark .orgchat-compose textarea{background:#101d31;color:#e7eefb;border-color:#3b506f}
+.orgchat-compose button{width:40px;height:40px;flex:0 0 40px;border:0;border-radius:12px;background:#3478f6;color:#fff;display:grid;place-items:center;cursor:pointer}
+.orgchat-compose button:disabled{opacity:.45;cursor:not-allowed}
+.orgchat-compose-note{padding:0 14px 8px;background:#fff;color:#8b98aa;font-size:9px}
+.is-dark .orgchat-compose-note{background:#17263d;color:#90a3c0}
+.orgchat-error{padding:6px 12px;background:#fff0f1;color:#c81e36;font-size:11px}
+.orgchat-alert{position:fixed;right:26px;bottom:min(730px,calc(100dvh - 130px));z-index:1201;width:min(380px,calc(100vw - 32px));display:flex;align-items:flex-start;gap:10px;padding:13px;border:1px solid #ffb9c1;border-left:5px solid #ef233c;border-radius:14px;background:#fff;color:#17243b;box-shadow:0 14px 36px rgba(16,29,53,.2)}
+.orgchat-alert-icon{width:34px;height:34px;flex:0 0 34px;border-radius:10px;background:#ffedf0;color:#df1935;display:grid;place-items:center}
+.orgchat-alert-copy{min-width:0;flex:1;border:0;background:none;text-align:left;display:flex;flex-direction:column;gap:4px;cursor:pointer;color:inherit}
+.orgchat-alert-copy b{font-size:12px}
+.orgchat-alert-copy span{font-size:11px;color:#5c6b81;overflow-wrap:anywhere}
+.orgchat-alert-copy small{font-size:10px;color:#3478f6;font-weight:700}
+.orgchat-alert-close{border:0;background:none;color:#78869a;cursor:pointer;padding:2px}
+@media(max-width:700px){
+  .orgchat-fab{right:18px;bottom:88px;width:56px;height:56px}
+  .orgchat-panel{right:0;bottom:0;width:100vw;height:100dvh;max-height:100dvh;min-height:0;border-radius:0;border:0}
+  .orgchat-header{padding-top:env(safe-area-inset-top);height:calc(62px + env(safe-area-inset-top));flex-basis:calc(62px + env(safe-area-inset-top))}
+  .orgchat-body.admin-mode{flex-direction:column}
+  .orgchat-body.admin-mode .orgchat-inbox{width:100%;height:34%;max-height:190px;flex:0 0 34%;border-right:0;border-bottom:1px solid #dbe4f1}
+  .orgchat-body.admin-mode .orgchat-conversation{min-height:58px}
+  .orgchat-thread{min-height:0}
+  .orgchat-messages{padding:14px 12px}
+  .orgchat-message-row{max-width:90%}
+  .orgchat-compose{padding-bottom:max(7px,env(safe-area-inset-bottom))}
+  .orgchat-alert{right:12px;bottom:auto;top:calc(12px + env(safe-area-inset-top));width:calc(100vw - 24px)}
+}

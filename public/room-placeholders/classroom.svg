@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+<title id="title">CLASSROOM illustrative placeholder</title>
+<desc id="desc">A stylized educational facility illustration, not a photograph of an actual room.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F1F5FB"></stop>
+    <stop offset="1" stop-color="#DCEBFA"></stop>
+  </linearGradient>
+  <linearGradient id="floor" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#D5E6FA"></stop>
+    <stop offset="1" stop-color="#B9D1EE"></stop>
+  </linearGradient>
+</defs>
+<rect width="1280" height="720" fill="url(#bg)"></rect>
+<circle cx="1080" cy="120" r="170" fill="#70B7FF" opacity=".13"></circle>
+<circle cx="180" cy="590" r="180" fill="#3478F6" opacity=".07"></circle>
+<path d="M0 575Q320 530 640 575T1280 575V720H0Z" fill="url(#floor)" opacity=".75"></path>
+<rect x="170" y="170" width="940" height="300" rx="22" fill="#E9F2FF"></rect>
+<rect x="240" y="220" width="390" height="190" rx="12" fill="#FFFFFF" stroke="#A9C5E8" stroke-width="8"></rect>
+<path d="M285 275h290M285 325h230" stroke="#70B7FF" stroke-width="12" stroke-linecap="round"></path>
+<rect x="710" y="225" width="300" height="190" rx="12" fill="#D5E6FA"></rect>
+<path d="M755 265h210M755 310h175" stroke="#8AAED8" stroke-width="10" stroke-linecap="round"></path>
+<g fill="#1C3155">
+  <rect x="210" y="510" width="230" height="26" rx="8"></rect>
+  <rect x="525" y="510" width="230" height="26" rx="8"></rect>
+  <rect x="840" y="510" width="230" height="26" rx="8"></rect>
+</g>
+<g fill="#70B7FF">
+  <rect x="235" y="540" width="18" height="70" rx="5"></rect>
+  <rect x="397" y="540" width="18" height="70" rx="5"></rect>
+  <rect x="550" y="540" width="18" height="70" rx="5"></rect>
+  <rect x="712" y="540" width="18" height="70" rx="5"></rect>
+  <rect x="865" y="540" width="18" height="70" rx="5"></rect>
+  <rect x="1027" y="540" width="18" height="70" rx="5"></rect>
+</g>
+<rect x="50" y="52" width="360" height="64" rx="18" fill="#101D35"></rect>
+<circle cx="88" cy="84" r="12" fill="#70B7FF"></circle>
+<text x="118" y="92" fill="#FFFFFF" font-family="Arial,sans-serif" font-size="25" font-weight="700" letter-spacing="2">CLASSROOM</text>
+<text x="58" y="672" fill="#1C3155" font-family="Arial,sans-serif" font-size="24" font-weight="600">Learning space</text>
+<text x="1220" y="672" text-anchor="end" fill="#65748B" font-family="Arial,sans-serif" font-size="17" font-weight="700" letter-spacing="1">ILLUSTRATION · NOT A REAL PHOTO</text>
+</svg>

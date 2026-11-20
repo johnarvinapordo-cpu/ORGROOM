@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+<title id="title">LECTURE ROOM illustrative placeholder</title>
+<desc id="desc">A stylized educational facility illustration, not a photograph of an actual room.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F1F5FB"></stop>
+    <stop offset="1" stop-color="#DCEBFA"></stop>
+  </linearGradient>
+  <linearGradient id="floor" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#D5E6FA"></stop>
+    <stop offset="1" stop-color="#B9D1EE"></stop>
+  </linearGradient>
+</defs>
+<rect width="1280" height="720" fill="url(#bg)"></rect>
+<circle cx="1080" cy="120" r="170" fill="#70B7FF" opacity=".13"></circle>
+<circle cx="180" cy="590" r="180" fill="#3478F6" opacity=".07"></circle>
+<path d="M0 575Q320 530 640 575T1280 575V720H0Z" fill="url(#floor)" opacity=".75"></path>
+<rect x="160" y="150" width="960" height="345" rx="24" fill="#E9F2FF"></rect>
+<rect x="410" y="210" width="460" height="205" rx="14" fill="#1C3155"></rect>
+<rect x="435" y="235" width="410" height="155" rx="8" fill="#70B7FF"></rect>
+<path d="M475 280h310M475 325h250" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round" opacity=".85"></path>
+<g fill="#A9C5E8">
+  <path d="M200 520h250l30 30H170zM515 520h250l30 30H485zM830 520h250l30 30H800z"></path>
+  <rect x="205" y="550" width="18" height="70" rx="6"></rect>
+  <rect x="430" y="550" width="18" height="70" rx="6"></rect>
+  <rect x="520" y="550" width="18" height="70" rx="6"></rect>
+  <rect x="745" y="550" width="18" height="70" rx="6"></rect>
+  <rect x="835" y="550" width="18" height="70" rx="6"></rect>
+  <rect x="1060" y="550" width="18" height="70" rx="6"></rect>
+</g>
+<rect x="50" y="52" width="360" height="64" rx="18" fill="#101D35"></rect>
+<circle cx="88" cy="84" r="12" fill="#70B7FF"></circle>
+<text x="118" y="92" fill="#FFFFFF" font-family="Arial,sans-serif" font-size="25" font-weight="700" letter-spacing="2">LECTURE ROOM</text>
+<text x="58" y="672" fill="#1C3155" font-family="Arial,sans-serif" font-size="24" font-weight="600">Presentation and instruction</text>
+<text x="1220" y="672" text-anchor="end" fill="#65748B" font-family="Arial,sans-serif" font-size="17" font-weight="700" letter-spacing="1">ILLUSTRATION · NOT A REAL PHOTO</text>
+</svg>

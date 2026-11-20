@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+<title id="title">COMPUTER LAB illustrative placeholder</title>
+<desc id="desc">A stylized educational facility illustration, not a photograph of an actual room.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F1F5FB"></stop>
+    <stop offset="1" stop-color="#DCEBFA"></stop>
+  </linearGradient>
+  <linearGradient id="floor" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#D5E6FA"></stop>
+    <stop offset="1" stop-color="#B9D1EE"></stop>
+  </linearGradient>
+</defs>
+<rect width="1280" height="720" fill="url(#bg)"></rect>
+<circle cx="1080" cy="120" r="170" fill="#70B7FF" opacity=".13"></circle>
+<circle cx="180" cy="590" r="180" fill="#3478F6" opacity=".07"></circle>
+<path d="M0 575Q320 530 640 575T1280 575V720H0Z" fill="url(#floor)" opacity=".75"></path>
+<rect x="160" y="165" width="960" height="325" rx="24" fill="#E9F2FF"></rect>
+<g fill="#1C3155">
+  <rect x="235" y="250" width="250" height="145" rx="12"></rect>
+  <rect x="515" y="250" width="250" height="145" rx="12"></rect>
+  <rect x="795" y="250" width="250" height="145" rx="12"></rect>
+</g>
+<g fill="#70B7FF">
+  <rect x="255" y="270" width="210" height="105" rx="7"></rect>
+  <rect x="535" y="270" width="210" height="105" rx="7"></rect>
+  <rect x="815" y="270" width="210" height="105" rx="7"></rect>
+</g>
+<g fill="#FFFFFF">
+  <path d="M330 395h60l18 28h-96zM610 395h60l18 28h-96zM890 395h60l18 28h-96z"></path>
+</g>
+<g fill="#A9C5E8">
+  <rect x="190" y="500" width="900" height="24" rx="10"></rect>
+  <rect x="250" y="524" width="24" height="100" rx="6"></rect>
+  <rect x="1006" y="524" width="24" height="100" rx="6"></rect>
+</g>
+<rect x="50" y="52" width="360" height="64" rx="18" fill="#101D35"></rect>
+<circle cx="88" cy="84" r="12" fill="#70B7FF"></circle>
+<text x="118" y="92" fill="#FFFFFF" font-family="Arial,sans-serif" font-size="25" font-weight="700" letter-spacing="2">COMPUTER LAB</text>
+<text x="58" y="672" fill="#1C3155" font-family="Arial,sans-serif" font-size="24" font-weight="600">Technology learning space</text>
+<text x="1220" y="672" text-anchor="end" fill="#65748B" font-family="Arial,sans-serif" font-size="17" font-weight="700" letter-spacing="1">ILLUSTRATION · NOT A REAL PHOTO</text>
+</svg>

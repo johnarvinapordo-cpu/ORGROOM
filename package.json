@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "backend": "node server/auth-server.js",
+    "bootstrap:super-admin": "node scripts/bootstrap-super-admin.js",
     "frontend": "vite --host 0.0.0.0 --open",
     "build": "vite build",
     "preview": "vite preview"

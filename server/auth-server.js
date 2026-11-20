@@ -4,6 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbQuery, dbTransaction, ensureDatabase, pool } from './db.js';
+import { MAX_ACCOUNT_CAPACITY, ACCOUNT_CAPACITY_LOCK_NAME } from './account-config.js';
 
 
 
@@ -39,7 +40,9 @@ const emailGatewayKey = String(
 ).trim();
 
 const allowedEmail = email => /^[^\s@]+@(gmail\.com|cmdi\.edu\.ph)$/i.test(String(email || '').trim());
-const allowedPosition = position => position === 'teacher';
+const normalizeRole = role => String(role || '').trim().toUpperCase();
+const isAdminRole = role => ['ADMIN', 'SUPER_ADMIN'].includes(normalizeRole(role));
+const isSuperAdminRole = role => normalizeRole(role) === 'SUPER_ADMIN';
 const strongPassword = password => typeof password === 'string' && password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 async function verifyPassword(password, storedHash){
   const hash=String(storedHash||'');
@@ -135,7 +138,7 @@ async function currentUser(req){
   const token=raw.slice(7).trim();
   if(!token) return null;
   const rows=await dbQuery('SELECT u.* FROM auth_sessions s INNER JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>NOW() LIMIT 1',[hashSessionToken(token)]);
-  if(!rows[0]) return null;
+  if(!rows[0] || !Boolean(rows[0].is_active)) return null;
   await dbQuery('UPDATE auth_sessions SET last_seen_at=NOW() WHERE token_hash=?',[hashSessionToken(token)]);
   return rows[0];
 }
@@ -150,13 +153,20 @@ async function requireAdminAuth(req, res) {
   const user = await requireAuth(req, res);
   if (!user) return null;
 
-  if (String(user.role || '').toLowerCase() !== 'admin') {
-    res.status(403).json({
-      message: 'Administrator access is required.'
-    });
+  if (!isAdminRole(user.role)) {
+    res.status(403).json({ message: 'Administrator access is required.' });
     return null;
   }
+  return user;
+}
 
+async function requireSuperAdminAuth(req, res) {
+  const user = await requireAuth(req, res);
+  if (!user) return null;
+  if (!isSuperAdminRole(user.role)) {
+    res.status(403).json({ message: 'Super Admin access is required.' });
+    return null;
+  }
   return user;
 }
 
@@ -167,7 +177,7 @@ function dbTimeMinutes(value){ if(!validDbTime(value)) return NaN; const [h,m]=S
 
 async function sendCode(email, code, purpose) {
 
-  const labels = { login: 'Verify your email', signup: 'Verify your email', forgot: 'Password reset' };
+  const labels = { login: 'Verify your email', forgot: 'Password reset' };
   const subject = `ORGROOM — ${labels[purpose] || 'Verification'}`;
   const text = `Hello,\n\nThank you for using ORGROOM — Facility Reservation Platform.\n\nYour verification code is: ${code}\n\nThis code expires in 10 minutes and can only be used once.\n\nIf you did not request this code, you can ignore this email.\n\nRegards,\nORGROOM\nFacility Reservation Platform`;
   const html = `<div style="margin:0;background:#f5f7fb;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#172033"><div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e9f2;border-radius:20px;overflow:hidden"><div style="padding:28px 32px;background:#2563eb;color:#fff"><div style="font-size:22px;font-weight:800;letter-spacing:.5px">ORGROOM</div><div style="margin-top:4px;font-size:13px;opacity:.9">Facility Reservation Platform</div></div><div style="padding:32px"><h1 style="margin:0 0 12px;font-size:24px">Verify your email</h1><p style="margin:0 0 24px;line-height:1.6;color:#596579">Thank you for registering with ORGROOM. Enter the verification code below to continue.</p><div style="padding:20px;text-align:center;background:#f4f7ff;border:1px solid #dce5ff;border-radius:14px"><div style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:1.2px">Verification code</div><div style="margin-top:8px;font-size:36px;font-weight:800;letter-spacing:8px;color:#1d4ed8">${code}</div></div><p style="margin:22px 0 0;line-height:1.6;color:#596579">This code expires in <strong>10 minutes</strong> and can only be used once.</p><p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:#7b8494">If you did not create this account or request this code, you can safely ignore this email.</p></div></div></div>`;
@@ -286,7 +296,7 @@ async function notifyReservationEvent(reservationId,type){
     if(!row) return;
     const d=reservationNotificationDetails(row);
     d.reservationId=Number(reservationId);
-    const admins=await dbQuery("SELECT id,name,email FROM users WHERE LOWER(role)='admin' AND is_verified=1 AND (? IS NULL OR id<>?) ORDER BY id",[row.user_id==null?null:Number(row.user_id),row.user_id==null?0:Number(row.user_id)]);
+    const admins=await dbQuery("SELECT id,name,email FROM users WHERE LOWER(role) IN ('admin','super_admin') AND is_verified=1 AND (? IS NULL OR id<>?) ORDER BY id",[row.user_id==null?null:Number(row.user_id),row.user_id==null?0:Number(row.user_id)]);
     const labels={
       NEW_RESERVATION_REQUEST:{title:'New reservation request',adminMessage:`${d.requesterName} (${d.requesterEmail}) submitted ${d.building} — ${d.room} for ${d.date} · ${d.time}. Purpose: ${d.purpose}`,userTitle:'Reservation request submitted',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} is now pending admin review.`},
       RESERVATION_APPROVED:{title:'Reservation approved',adminMessage:`${d.requesterName}'s request for ${d.building} — ${d.room} was approved by ${d.decisionBy || 'an administrator'}.`,userTitle:'Reservation approved',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was approved by ${d.decisionBy || 'an administrator'}.`},
@@ -342,9 +352,9 @@ async function consumeCode(email, purpose, code) {
 function profileFromUser(user) {
   const email = user.email;
   const localName = user.name?.trim() || email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const rawRole = String(user.role || '').toLowerCase();
-  const role = rawRole === 'admin' ? 'admin' : 'teacher';
-  return { id: Number(user.id), name: localName, email, role, org: user.organization || (role === 'admin' ? 'Administration' : 'Academic Faculty'), department: user.department || '', position: user.position || (role === 'teacher' ? 'teacher' : 'admin') };
+  const rawRole = normalizeRole(user.role);
+  const role = rawRole === 'SUPER_ADMIN' ? 'super_admin' : rawRole === 'ADMIN' ? 'admin' : 'teacher';
+  return { id: Number(user.id), name: localName, email, role, org: user.organization || (isAdminRole(rawRole) ? 'Administration' : 'Academic Faculty'), department: user.department || '', position: user.position || (role === 'teacher' ? 'teacher' : 'admin') };
 }
 
 function mapFacility(row) {
@@ -484,19 +494,19 @@ app.post('/api/auth/test-email', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login/request-code', async (req,res) => { try { const email=normalizeEmail(req.body.email), password=req.body.password; if(!allowedEmail(email)||!password)return res.status(400).json({message:'Valid email and password are required.'}); const rows=await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]); const user=rows[0]; if(!user||!(await verifyPassword(password,user.password_hash)))return res.status(401).json({message:'Invalid email or password.'});
+app.post('/api/auth/login/request-code', async (req,res) => { try { const email=normalizeEmail(req.body.email), password=req.body.password; if(!allowedEmail(email)||!password)return res.status(400).json({message:'Valid email and password are required.'}); const rows=await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]); const user=rows[0]; if(!user||!Boolean(user.is_active)||!(await verifyPassword(password,user.password_hash)))return res.status(401).json({message:'Invalid email or password.'});
     if(user && /^[a-f0-9]{64}$/i.test(String(user.password_hash||''))){ const migrated=await bcrypt.hash(String(password),12); await dbQuery('UPDATE users SET password_hash=? WHERE id=?',[migrated,user.id]); user.password_hash=migrated; } if(Boolean(user.is_verified)){const token=await createSession(user.id);return res.json({message:'Login successful.',verified:true,user:profileFromUser(user),token,expiresInSeconds:SESSION_TTL_MS/1000});} try{await issueCode(email,'login',{userId:user.id});}catch(e){console.error(`ORGROOM login verification email failed: ${e.message||e}`);return res.status(503).json({message:'We could not send the verification email right now. Please try again.'});} res.json({message:'Your email is not verified yet. A 6-digit verification code was sent to your email. The code expires in 10 minutes.',verified:false,requiresVerification:true,expiresInSeconds:600}); }catch(e){res.status(400).json({message:e.message||'Unable to sign in.'})} });
-app.post('/api/auth/login/verify', async(req,res)=>{try{const email=normalizeEmail(req.body.email);const user=(await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user)return res.status(401).json({message:'Invalid verification request.'});if(Boolean(user.is_verified)){const token=await createSession(user.id);return res.json({message:'Login successful.',user:profileFromUser(user),token,expiresInSeconds:SESSION_TTL_MS/1000});}await consumeCode(email,'login',req.body.code);await dbQuery('UPDATE users SET is_verified=1 WHERE id=?',[user.id]);const token=await createSession(user.id);res.json({message:'Email verified. Sign-in successful.',user:profileFromUser({...user,is_verified:1}),token,expiresInSeconds:SESSION_TTL_MS/1000});}catch(e){res.status(401).json({message:['Invalid verification code.','This verification code has expired. Please request a new code.'].includes(e.message)?e.message:'Verification failed.'})}});
+app.post('/api/auth/login/verify', async(req,res)=>{try{const email=normalizeEmail(req.body.email);const user=(await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user||!Boolean(user.is_active))return res.status(401).json({message:'Invalid verification request.'});if(Boolean(user.is_verified)){const token=await createSession(user.id);return res.json({message:'Login successful.',user:profileFromUser(user),token,expiresInSeconds:SESSION_TTL_MS/1000});}await consumeCode(email,'login',req.body.code);await dbQuery('UPDATE users SET is_verified=1 WHERE id=?',[user.id]);const token=await createSession(user.id);res.json({message:'Email verified. Sign-in successful.',user:profileFromUser({...user,is_verified:1}),token,expiresInSeconds:SESSION_TTL_MS/1000});}catch(e){res.status(401).json({message:['Invalid verification code.','This verification code has expired. Please request a new code.'].includes(e.message)?e.message:'Verification failed.'})}});
 app.get('/api/auth/me',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.json({user:profileFromUser(user)});}catch(e){res.status(401).json({message:'Unable to restore your session.'});}});
 app.post('/api/auth/logout',async(req,res)=>{try{const raw=String(req.headers[SESSION_COOKIELESS_HEADER]||'');if(raw.toLowerCase().startsWith('bearer '))await dbQuery('DELETE FROM auth_sessions WHERE token_hash=?',[hashSessionToken(raw.slice(7).trim())]);res.json({message:'Signed out.'});}catch(e){res.status(500).json({message:'Unable to sign out.'});}});
 
-app.post('/api/auth/signup/request-code',async(req,res)=>{try{const email=normalizeEmail(req.body.email),password=req.body.password,position=req.body.position;if(!allowedEmail(email))return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});if(!strongPassword(password))return res.status(400).json({message:'Password must be at least 8 characters and contain a letter and a number.'});if(position!=='teacher')return res.status(400).json({message:'Only Teacher accounts can be created through public registration.'});const existing=(await dbQuery('SELECT id,is_verified FROM users WHERE email=? LIMIT 1',[email]))[0];if(existing)return res.json({message:'If this email is already registered, please sign in instead. New accounts receive a verification code by email.',alreadyExists:true});const passwordHash=await bcrypt.hash(password,12);const role='teacher';const organization='Academic Faculty';const department='Academic Faculty';const result=await dbQuery('INSERT INTO users (name,email,password_hash,role,organization,department,position,is_verified) VALUES (?,?,?,?,?,?,?,0)',[email.split('@')[0],email,passwordHash,role,organization,department,position]);try{await issueCode(email,'signup',{userId:result.insertId});}catch(e){console.error(`ORGROOM signup verification email failed: ${e.message||e}`);return res.status(503).json({message:'Your account was created, but we could not send the verification email right now. Please use Resend Code after configuring email delivery.'});}res.json({message:'Your account was created but is not verified yet. A 6-digit verification code was sent to your email. The code expires in 10 minutes.',expiresInSeconds:600});}catch(e){console.error(`ORGROOM signup failed: ${e.message||e}`);res.status(400).json({message:e.message||'Unable to start account verification.'})}});
-app.post('/api/auth/signup/verify',async(req,res)=>{try{const email=normalizeEmail(req.body.email);const user=(await dbQuery('SELECT * FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user)return res.status(404).json({message:'Account not found.'});if(Boolean(user.is_verified))return res.json({message:'Account is already verified. Please sign in.',user:profileFromUser(user)});await consumeCode(email,'signup',req.body.code);await dbQuery('UPDATE users SET is_verified=1 WHERE id=?',[user.id]);const rows=await dbQuery('SELECT * FROM users WHERE id=?',[user.id]);res.json({message:'Account verified successfully. Please sign in.',user:profileFromUser({...rows[0],is_verified:1})});}catch(e){res.status(400).json({message:e.message||'Account verification failed.'})}});
-app.post('/api/auth/verification/resend',async(req,res)=>{try{const email=normalizeEmail(req.body.email),purpose=String(req.body.purpose||'');if(!['signup','login'].includes(purpose)||!allowedEmail(email))return res.status(400).json({message:'Invalid verification request.'});const user=(await dbQuery('SELECT id,is_verified FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user)return res.status(400).json({message:'Invalid verification request.'});if(Boolean(user.is_verified))return res.status(400).json({message:'This account is already verified. You can sign in normally.'});await issueCode(email,purpose,{userId:user.id});res.json({message:'A new 6-digit verification code was sent. The previous code is no longer valid. The new code expires in 10 minutes.',expiresInSeconds:600});}catch(e){if(String(e.message||'').includes('Please wait 30 seconds'))return res.status(429).json({message:e.message});console.error(`ORGROOM verification resend failed: ${e.message||e}`);res.status(503).json({message:'We could not send the verification email right now. Please try again later.'})}});
+app.post('/api/auth/signup/request-code', (_req,res)=>res.status(410).json({message:'Public account registration is disabled. Contact an ORGROOM administrator for an account.'}));
+app.post('/api/auth/signup/verify', (_req,res)=>res.status(410).json({message:'Public account registration is disabled.'}));
+app.post('/api/auth/verification/resend',async(req,res)=>{try{const email=normalizeEmail(req.body.email),purpose=String(req.body.purpose||'');if(purpose!=='login'||!allowedEmail(email))return res.status(400).json({message:'Invalid verification request.'});const user=(await dbQuery('SELECT id,is_verified,is_active FROM users WHERE email=? LIMIT 1',[email]))[0];if(!user||!Boolean(user.is_active))return res.status(400).json({message:'Invalid verification request.'});if(Boolean(user.is_verified))return res.status(400).json({message:'This account is already verified. You can sign in normally.'});await issueCode(email,purpose,{userId:user.id});res.json({message:'A new 6-digit verification code was sent. The previous code is no longer valid. The new code expires in 10 minutes.',expiresInSeconds:600});}catch(e){if(String(e.message||'').includes('Please wait 30 seconds'))return res.status(429).json({message:e.message});console.error(`ORGROOM verification resend failed: ${e.message||e}`);res.status(503).json({message:'We could not send the verification email right now. Please try again later.'})}});
 
 
-app.post('/api/auth/forgot-password/request-code',async(req,res)=>{try{const email=normalizeEmail(req.body.email);if(!allowedEmail(email))return res.status(400).json({message:'Use a valid @gmail.com or @cmdi.edu.ph email address.'});const exists=(await dbQuery('SELECT id FROM users WHERE email=? LIMIT 1',[email])).length; if(exists){try{await issueCode(email,'forgot');}catch(e){if(String(e.message||'').includes('Please wait 30 seconds'))return res.status(429).json({message:e.message});throw e;}} res.json({message:'If an ORGROOM account exists for this email, a password reset code has been sent.',expiresInSeconds:600});}catch(e){res.status(400).json({message:e.message||'Unable to send reset code.'})}});
-app.post('/api/auth/forgot-password/reset',async(req,res)=>{try{const email=normalizeEmail(req.body.email);if(!strongPassword(req.body.newPassword))return res.status(400).json({message:'New password must be at least 8 characters and contain a letter and a number.'});await consumeCode(email,'forgot',req.body.code);const hash=await bcrypt.hash(req.body.newPassword,12);const result=await dbQuery('UPDATE users SET password_hash=? WHERE email=?',[hash,email]);if(!result.affectedRows)return res.status(400).json({message:'Unable to reset the password with the supplied verification code.'});const resetUser=(await dbQuery('SELECT id FROM users WHERE email=? LIMIT 1',[email]))[0];if(resetUser) await dbQuery('DELETE FROM auth_sessions WHERE user_id=?',[resetUser.id]);res.json({message:'Password updated successfully. All existing sessions were signed out. You can now sign in.'});}catch(e){res.status(400).json({message:e.message||'Unable to reset password.'})}});
+app.post('/api/auth/forgot-password/request-code',async(req,res)=>{try{const email=normalizeEmail(req.body.email);if(!allowedEmail(email))return res.status(400).json({message:'Use a valid @gmail.com or @cmdi.edu.ph email address.'});const exists=(await dbQuery('SELECT id FROM users WHERE email=? AND is_active=1 LIMIT 1',[email])).length; if(exists){try{await issueCode(email,'forgot');}catch(e){if(String(e.message||'').includes('Please wait 30 seconds'))return res.status(429).json({message:e.message});throw e;}} res.json({message:'If an ORGROOM account exists for this email, a password reset code has been sent.',expiresInSeconds:600});}catch(e){res.status(400).json({message:e.message||'Unable to send reset code.'})}});
+app.post('/api/auth/forgot-password/reset',async(req,res)=>{try{const email=normalizeEmail(req.body.email);if(!strongPassword(req.body.newPassword))return res.status(400).json({message:'New password must be at least 8 characters and contain a letter and a number.'});await consumeCode(email,'forgot',req.body.code);const hash=await bcrypt.hash(req.body.newPassword,12);const result=await dbQuery('UPDATE users SET password_hash=? WHERE email=? AND is_active=1',[hash,email]);if(!result.affectedRows)return res.status(400).json({message:'Unable to reset the password with the supplied verification code.'});const resetUser=(await dbQuery('SELECT id FROM users WHERE email=? LIMIT 1',[email]))[0];if(resetUser) await dbQuery('DELETE FROM auth_sessions WHERE user_id=?',[resetUser.id]);res.json({message:'Password updated successfully. All existing sessions were signed out. You can now sign in.'});}catch(e){res.status(400).json({message:e.message||'Unable to reset password.'})}});
 
 app.get('/api/users', async(req,res)=>{
   try{
@@ -505,7 +515,7 @@ app.get('/api/users', async(req,res)=>{
     const rows=await dbQuery(`
       SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at
       FROM users
-      ORDER BY CASE WHEN role='ADMIN' THEN 0 ELSE 1 END, name ASC, id ASC
+      ORDER BY CASE WHEN UPPER(role)='SUPER_ADMIN' THEN 0 WHEN UPPER(role)='ADMIN' THEN 1 ELSE 2 END, name ASC, id ASC
     `);
     res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json(rows.map(row=>({
@@ -526,7 +536,29 @@ app.get('/api/users', async(req,res)=>{
   }
 });
 
+app.get('/api/users/capacity', async(req,res)=>{
+  try{
+    const admin=await requireAdminAuth(req,res);
+    if(!admin) return;
+    const rows=await dbQuery('SELECT COUNT(*) AS total FROM users');
+    const currentCount=Number(rows[0]?.total||0);
+    res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({
+      currentCount,
+      maxAccounts:MAX_ACCOUNT_CAPACITY,
+      remainingSlots:Math.max(0,MAX_ACCOUNT_CAPACITY-currentCount),
+      isAtCapacity:currentCount>=MAX_ACCOUNT_CAPACITY
+    });
+  }catch(e){
+    console.error(`ORGROOM account capacity lookup failed: ${e.message||e}`);
+    res.status(500).json({message:'Unable to load account capacity.'});
+  }
+});
+
 app.post('/api/users', async(req,res)=>{
+  let connection=null;
+  let lockAcquired=false;
+  let transactionStarted=false;
   try{
     const admin=await requireAdminAuth(req,res);
     if(!admin) return;
@@ -534,36 +566,53 @@ app.post('/api/users', async(req,res)=>{
     const name=String(req.body.name||'').trim().slice(0,255);
     const email=normalizeEmail(req.body.email);
     const password=String(req.body.password||'');
-    const role=String(req.body.role||'').trim().toUpperCase();
+    const role=normalizeRole(req.body.role);
 
     if(!name) return res.status(400).json({message:'Full name is required.'});
     if(!allowedEmail(email)) return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});
-    if(!['TEACHER','ADMIN'].includes(role)) return res.status(400).json({message:'Role must be Teacher or Admin.'});
+    if(!['TEACHER','ADMIN'].includes(role)) return res.status(400).json({message:'Only Teacher and Admin accounts can be created here. SUPER_ADMIN accounts must use the secure one-time provisioning command.'});
     if(!strongPassword(password)) return res.status(400).json({message:'Password must be at least 8 characters and contain a letter and a number.'});
-
-    const existing=(await dbQuery('SELECT id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1',[email]))[0];
-    if(existing) return res.status(409).json({message:'An ORGROOM account with this email already exists.'});
 
     const passwordHash=await bcrypt.hash(password,12);
     const organization=role==='ADMIN'?'Administration':'Academic Faculty';
     const department=role==='ADMIN'?'Administration':'Academic Faculty';
     const position=role==='ADMIN'?'Administrator':'Teacher';
 
-    let userId=null;
-    try{
-      const result=await dbQuery(
-        'INSERT INTO users (name,email,password_hash,role,organization,department,position,is_verified,is_active) VALUES (?,?,?,?,?,?,?,0,1)',
-        [name,email,passwordHash,role,organization,department,position]
-      );
-      userId=Number(result.insertId);
-      await issueCode(email,'signup',{userId});
-    }catch(e){
-      if(userId) {
-        try{ await dbQuery('DELETE FROM users WHERE id=?',[userId]); }catch(cleanupError){ console.error(`ORGROOM account cleanup failed: ${cleanupError.message||cleanupError}`); }
-      }
-      if(String(e.code||'')==='ER_DUP_ENTRY') return res.status(409).json({message:'An ORGROOM account with this email already exists.'});
-      if(String(e.message||'').includes('Please wait 30 seconds')) return res.status(429).json({message:e.message});
-      throw e;
+    connection=await pool.getConnection();
+    const [lockRows]=await connection.query('SELECT GET_LOCK(?, 15) AS acquired',[ACCOUNT_CAPACITY_LOCK_NAME]);
+    lockAcquired=Number(lockRows[0]?.acquired)===1;
+    if(!lockAcquired) return res.status(503).json({message:'Account creation is temporarily busy. Please try again.'});
+
+    await connection.beginTransaction();
+    transactionStarted=true;
+    const [countRows]=await connection.query('SELECT COUNT(*) AS total FROM users');
+    const currentCount=Number(countRows[0]?.total||0);
+    if(currentCount>=MAX_ACCOUNT_CAPACITY){
+      const capacityError=new Error(`The ORGROOM account capacity has been reached (${currentCount} / ${MAX_ACCOUNT_CAPACITY}). Increase the configured account limit before creating another. Deactivated accounts still count.`);
+      capacityError.status=409;
+      throw capacityError;
+    }
+
+    const [existing]=await connection.query('SELECT id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1',[email]);
+    if(existing.length){
+      const duplicateError=new Error('An ORGROOM account with this email already exists.');
+      duplicateError.status=409;
+      throw duplicateError;
+    }
+
+    const [createdResult]=await connection.query(
+      'INSERT INTO users (name,email,password_hash,role,organization,department,position,is_verified,is_active) VALUES (?,?,?,?,?,?,?,0,1)',
+      [name,email,passwordHash,role,organization,department,position]
+    );
+    const userId=Number(createdResult.insertId);
+    await connection.commit();
+    transactionStarted=false;
+
+    let verificationSent=true;
+    try{ await issueCode(email,'login',{userId}); }
+    catch(e){
+      verificationSent=false;
+      console.error(`ORGROOM account verification email failed for ${email}: ${e.message||e}`);
     }
 
     const created=(await dbQuery(`
@@ -572,7 +621,7 @@ app.post('/api/users', async(req,res)=>{
     `,[userId]))[0];
 
     res.status(201).json({
-      message:`${role==='ADMIN'?'Admin':'Teacher'} account created. A verification code was sent to the account email.`,
+      message:verificationSent?`${role==='ADMIN'?'Admin':'Teacher'} account created. A verification code was sent to the account email.`:`${role==='ADMIN'?'Admin':'Teacher'} account created. The user can sign in to request an email verification code.`,
       user:{
         id:Number(created.id),name:created.name,email:created.email,role:String(created.role).toUpperCase(),
         organization:created.organization||'',department:created.department||'',position:created.position||'',
@@ -580,9 +629,286 @@ app.post('/api/users', async(req,res)=>{
       }
     });
   }catch(e){
+    if(transactionStarted && connection){
+      try{await connection.rollback();}catch{}
+    }
+    if(e.status===409 || e.status===503){
+      return res.status(e.status).json({message:e.message});
+    }
+    if(String(e.code||'')==='ER_DUP_ENTRY') return res.status(409).json({message:'An ORGROOM account with this email already exists.'});
     console.error(`ORGROOM user creation failed: ${e.message||e}`);
-    res.status(400).json({message:'Unable to create the account. Please check the entered information and try again.'});
+    res.status(500).json({message:'Unable to create the account. Please check the entered information and try again.'});
+  }finally{
+    if(connection){
+      if(lockAcquired){try{await connection.query('SELECT RELEASE_LOCK(?)',[ACCOUNT_CAPACITY_LOCK_NAME]);}catch{}}
+      connection.release();
+    }
   }
+});
+
+app.patch('/api/users/:id', async(req,res)=>{
+  try{
+    const actor=await requireAdminAuth(req,res);
+    if(!actor) return;
+    const targetId=Number(req.params.id);
+    if(!Number.isInteger(targetId)||targetId<=0) return res.status(400).json({message:'Invalid user reference.'});
+    if(targetId===Number(actor.id)) return res.status(403).json({message:'You cannot change your own role or account status here.'});
+    const target=(await dbQuery('SELECT id,name,email,role,organization,department,position,is_active,is_verified FROM users WHERE id=? LIMIT 1',[targetId]))[0];
+    if(!target) return res.status(404).json({message:'User account not found.'});
+    const targetRole=normalizeRole(target.role);
+    if(targetRole==='SUPER_ADMIN') return res.status(403).json({message:'The Super Admin account is protected and cannot be modified here.'});
+    if(!isSuperAdminRole(actor.role) && targetRole!=='TEACHER') return res.status(403).json({message:'Admins can manage Teacher accounts only.'});
+
+    if(req.body.isActive!==undefined && typeof req.body.isActive!=='boolean') return res.status(400).json({message:'Account status must be a boolean value.'});
+    const nextRole=req.body.role===undefined?targetRole:normalizeRole(req.body.role);
+    const nextActive=req.body.isActive===undefined?Boolean(target.is_active):req.body.isActive;
+    const nextName=req.body.name===undefined?String(target.name||''):String(req.body.name||'').trim().slice(0,255);
+    const nextEmail=req.body.email===undefined?normalizeEmail(target.email):normalizeEmail(req.body.email);
+    if(!nextName) return res.status(400).json({message:'Full name is required.'});
+    if(!allowedEmail(nextEmail)) return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});
+    if(!['TEACHER','ADMIN'].includes(nextRole)) return res.status(400).json({message:'Only Teacher and Admin roles are available for account management.'});
+    if(!isSuperAdminRole(actor.role) && nextRole!=='TEACHER') return res.status(403).json({message:'Admins cannot assign or change accounts to the Admin role.'});
+    const emailChanged=nextEmail!==normalizeEmail(target.email);
+    const roleChanged=nextRole!==targetRole;
+    const nextPosition=roleChanged?(nextRole==='ADMIN'?'Administrator':'Teacher'):(target.position||'');
+    const nextOrganization=roleChanged?(nextRole==='ADMIN'?'Administration':'Academic Faculty'):(target.organization||'');
+    const nextDepartment=roleChanged?(nextRole==='ADMIN'?'Administration':'Academic Faculty'):(target.department||'');
+    if(emailChanged){
+      const duplicate=(await dbQuery('SELECT id FROM users WHERE LOWER(email)=LOWER(?) AND id<>? LIMIT 1',[nextEmail,targetId]))[0];
+      if(duplicate) return res.status(409).json({message:'Another ORGROOM account already uses that email address.'});
+    }
+
+    await dbQuery('UPDATE users SET name=?,email=?,role=?,position=?,organization=?,department=?,is_active=?,is_verified=? WHERE id=?',[
+      nextName,nextEmail,nextRole,nextPosition,nextOrganization,nextDepartment,
+      nextActive?1:0,emailChanged?0:(Boolean(target.is_verified)?1:0),targetId
+    ]);
+    if(!nextActive || emailChanged) await dbQuery('DELETE FROM auth_sessions WHERE user_id=?',[targetId]);
+    if(emailChanged){
+      await dbQuery('DELETE FROM verification_codes WHERE email IN (?,?)',[normalizeEmail(target.email),nextEmail]);
+      if(nextActive){try{await issueCode(nextEmail,'login',{userId:targetId});}catch(e){console.error(`ORGROOM changed-email verification failed for ${nextEmail}: ${e.message||e}`);}}
+    }
+    const updated=(await dbQuery('SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at FROM users WHERE id=?',[targetId]))[0];
+    res.set('Cache-Control','no-store');
+    res.json({message:emailChanged?'Account updated. The new email must be verified at the next sign-in.':'Account updated successfully.',user:{id:Number(updated.id),name:updated.name,email:updated.email,role:normalizeRole(updated.role),organization:updated.organization||'',department:updated.department||'',position:updated.position||'',isVerified:Boolean(updated.is_verified),isActive:Boolean(updated.is_active),createdAt:String(updated.created_at)}});
+  }catch(e){
+    console.error(`ORGROOM user update failed: ${e.message||e}`);
+    res.status(500).json({message:'Unable to update the account.'});
+  }
+});
+
+app.delete('/api/users/:id', async(req,res)=>{
+  try{
+    const actor=await requireAdminAuth(req,res);
+    if(!actor) return;
+    const targetId=Number(req.params.id);
+    if(!Number.isInteger(targetId)||targetId<=0) return res.status(400).json({message:'Invalid user reference.'});
+    if(targetId===Number(actor.id)) return res.status(403).json({message:'You cannot deactivate your own account.'});
+    const target=(await dbQuery('SELECT id,role,is_active FROM users WHERE id=? LIMIT 1',[targetId]))[0];
+    if(!target) return res.status(404).json({message:'User account not found.'});
+    const targetRole=normalizeRole(target.role);
+    if(targetRole==='SUPER_ADMIN') return res.status(403).json({message:'The Super Admin account is protected.'});
+    if(!isSuperAdminRole(actor.role) && targetRole!=='TEACHER') return res.status(403).json({message:'Admins can deactivate Teacher accounts only.'});
+    await dbQuery('UPDATE users SET is_active=0 WHERE id=?',[targetId]);
+    await dbQuery('DELETE FROM auth_sessions WHERE user_id=?',[targetId]);
+    res.json({message:'Account deactivated. Reservation and account history have been preserved.'});
+  }catch(e){
+    console.error(`ORGROOM user deactivation failed: ${e.message||e}`);
+    res.status(500).json({message:'Unable to deactivate the account.'});
+  }
+});
+
+
+// ------------------------------------------------------------
+// Teacher-to-Admin persistent messaging API
+// ------------------------------------------------------------
+const chatSendTimes = new Map();
+const CHAT_MESSAGE_MAX_LENGTH = 4000;
+const CHAT_SEND_INTERVAL_MS = 700;
+function chatConversationId(value){
+  if(!/^\d+$/.test(String(value||'')))return null;
+  const id=Number(value);
+  return Number.isSafeInteger(id)&&id>0?id:null;
+}
+async function chatUnreadCount(conversationId,user){
+  const admin=isAdminRole(user.role);
+  const rows=await dbQuery(`
+    SELECT COUNT(*) AS count
+    FROM orgroom_chat_messages m
+    INNER JOIN orgroom_chat_conversations c ON c.id=m.conversation_id
+    LEFT JOIN orgroom_chat_reads rd
+      ON rd.conversation_id=c.id AND rd.user_id=?
+    WHERE m.conversation_id=?
+      AND m.id>COALESCE(rd.last_read_message_id,0)
+      AND ${admin ? 'm.sender_user_id=c.teacher_user_id' : '(m.sender_user_id IS NULL OR m.sender_user_id<>c.teacher_user_id)'}
+  `,[Number(user.id),Number(conversationId)]);
+  return Number(rows[0]?.count||0);
+}
+async function chatConversationForUser(conversationId,user){
+  const rows=await dbQuery('SELECT * FROM orgroom_chat_conversations WHERE id=? LIMIT 1',[conversationId]);
+  const conversation=rows[0];
+  if(!conversation)return null;
+  if(!isAdminRole(user.role)&&Number(conversation.teacher_user_id)!==Number(user.id))return null;
+  return conversation;
+}
+async function ensureTeacherConversation(user){
+  await dbQuery(`INSERT INTO orgroom_chat_conversations (teacher_user_id) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,[Number(user.id)]);
+  const rows=await dbQuery('SELECT * FROM orgroom_chat_conversations WHERE teacher_user_id=? LIMIT 1',[Number(user.id)]);
+  return rows[0]||null;
+}
+async function createChatNotifications(conversation,message,sender){
+  try{
+    const recipients=isAdminRole(sender.role)
+      ? await dbQuery("SELECT id,name FROM users WHERE LOWER(role) IN ('admin','super_admin') AND is_active=1 AND is_verified=1 AND id<>?",[Number(sender.id)])
+      : await dbQuery("SELECT id,name FROM users WHERE LOWER(role) IN ('admin','super_admin') AND is_active=1 AND is_verified=1 ORDER BY id");
+    if(isAdminRole(sender.role)){
+      const teacherId=Number(conversation.teacher_user_id);
+      if(teacherId){
+        const teacher=(await dbQuery('SELECT id FROM users WHERE id=? AND is_active=1',[teacherId]))[0];
+        if(teacher) recipients.push({id:teacherId,name:'Teacher'});
+      }
+    }
+    const preview=String(message.message_text||'').replace(/\s+/g,' ').slice(0,180);
+    const title=isAdminRole(sender.role)?'New Admin reply':'New message from Teacher';
+    const messageText=`${sender.name||'ORGROOM user'}: ${preview}`;
+    for(const recipient of recipients){
+      await dbQuery(
+        `INSERT INTO notifications (recipient_user_id,notification_type,reservation_id,event_key,title,message)
+         VALUES (?,'CHAT_MESSAGE',NULL,?,?,?)
+         ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
+        [Number(recipient.id),`chat:${Number(conversation.id)}:${Number(message.id)}:${Number(recipient.id)}`,title,messageText]
+      );
+    }
+  }catch(error){
+    // A notification write must never turn an already-saved message into a failed send.
+    console.error(`ORGROOM chat notification creation failed: ${error.message||error}`);
+  }
+}
+
+app.get('/api/chat/conversation',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);if(!user)return;
+    if(isAdminRole(user.role))return res.status(403).json({message:'Use the shared Admin inbox.'});
+    if(normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Teacher messaging access is required.'});
+    const rows=await dbQuery(`
+      SELECT c.*,u.name AS teacher_name,
+        (SELECT m.id FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message_id,
+        (SELECT m.message_text FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+        (SELECT m.created_at FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message_at,
+        (SELECT m.sender_user_id FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_sender_id,
+        (SELECT m.id FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND (m.sender_user_id IS NULL OR m.sender_user_id<>c.teacher_user_id) ORDER BY m.id DESC LIMIT 1) AS last_admin_message_id,
+        (SELECT m.message_text FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND (m.sender_user_id IS NULL OR m.sender_user_id<>c.teacher_user_id) ORDER BY m.id DESC LIMIT 1) AS last_admin_message,
+        (SELECT m.created_at FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND (m.sender_user_id IS NULL OR m.sender_user_id<>c.teacher_user_id) ORDER BY m.id DESC LIMIT 1) AS last_admin_message_at
+      FROM orgroom_chat_conversations c
+      LEFT JOIN users u ON u.id=c.teacher_user_id
+      WHERE c.teacher_user_id=? LIMIT 1
+    `,[Number(user.id)]);
+    const conversation=rows[0]||null;
+    const unreadCount=conversation?await chatUnreadCount(conversation.id,user):0;
+    res.set('Cache-Control','no-store');
+    res.json({conversation:conversation?{id:Number(conversation.id),teacherName:conversation.teacher_name||user.name,updatedAt:String(conversation.updated_at),lastMessageId:conversation.last_message_id==null?null:Number(conversation.last_message_id),lastMessage:conversation.last_message||'',lastMessageAt:conversation.last_message_at?String(conversation.last_message_at):String(conversation.updated_at),lastSenderId:conversation.last_sender_id==null?null:Number(conversation.last_sender_id),lastAdminMessageId:conversation.last_admin_message_id==null?null:Number(conversation.last_admin_message_id),lastAdminMessage:conversation.last_admin_message||'',lastAdminMessageAt:conversation.last_admin_message_at?String(conversation.last_admin_message_at):String(conversation.updated_at)}:null,unreadCount});
+  }catch(e){console.error('Chat conversation lookup failed:',e.message);res.status(500).json({message:'Unable to load your conversation.'});}
+});
+
+app.post('/api/chat/conversation',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);if(!user)return;
+    if(normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Only Teachers can start a Teacher-to-Admin conversation.'});
+    const conversation=await ensureTeacherConversation(user);
+    if(!conversation)return res.status(500).json({message:'Unable to create your conversation.'});
+    res.json({conversation:{id:Number(conversation.id),teacherName:user.name,updatedAt:String(conversation.updated_at)}});
+  }catch(e){console.error('Chat conversation creation failed:',e.message);res.status(500).json({message:'Unable to start your conversation.'});}
+});
+
+app.get('/api/chat/inbox',async(req,res)=>{
+  try{
+    const user=await requireAdminAuth(req,res);if(!user)return;
+    const rows=await dbQuery(`
+      SELECT c.id,c.teacher_user_id,c.created_at,c.updated_at,u.name AS teacher_name,u.email AS teacher_email,
+        (SELECT m.message_text FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message,
+        (SELECT m.created_at FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message_at,
+        (SELECT m.id FROM orgroom_chat_messages m WHERE m.conversation_id=c.id ORDER BY m.id DESC LIMIT 1) AS last_message_id,
+        (SELECT m.id FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND m.sender_user_id=c.teacher_user_id ORDER BY m.id DESC LIMIT 1) AS last_teacher_message_id,
+        (SELECT m.message_text FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND m.sender_user_id=c.teacher_user_id ORDER BY m.id DESC LIMIT 1) AS last_teacher_message,
+        (SELECT m.created_at FROM orgroom_chat_messages m WHERE m.conversation_id=c.id AND m.sender_user_id=c.teacher_user_id ORDER BY m.id DESC LIMIT 1) AS last_teacher_message_at,
+        (SELECT COUNT(*) FROM orgroom_chat_messages m
+          LEFT JOIN orgroom_chat_reads rd ON rd.conversation_id=c.id AND rd.user_id=?
+          WHERE m.conversation_id=c.id AND m.id>COALESCE(rd.last_read_message_id,0)
+          AND m.sender_user_id=c.teacher_user_id) AS unread_count
+      FROM orgroom_chat_conversations c
+      LEFT JOIN users u ON u.id=c.teacher_user_id
+      ORDER BY COALESCE(last_message_at,c.updated_at) DESC,c.id DESC
+    `,[Number(user.id)]);
+    res.set('Cache-Control','no-store');
+    res.json({conversations:rows.map(r=>({id:Number(r.id),teacherId:r.teacher_user_id==null?null:Number(r.teacher_user_id),teacherName:r.teacher_name||'Former Teacher account',teacherEmail:r.teacher_email||'',lastMessage:r.last_message||'',lastMessageAt:r.last_message_at?String(r.last_message_at):String(r.updated_at),lastMessageId:r.last_message_id==null?null:Number(r.last_message_id),lastTeacherMessageId:r.last_teacher_message_id==null?null:Number(r.last_teacher_message_id),lastTeacherMessage:r.last_teacher_message||'',lastTeacherMessageAt:r.last_teacher_message_at?String(r.last_teacher_message_at):String(r.updated_at),unreadCount:Number(r.unread_count||0)}))});
+  }catch(e){console.error('Chat inbox failed:',e.message);res.status(500).json({message:'Unable to load the Admin inbox.'});}
+});
+
+app.get('/api/chat/conversations/:id/messages',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);if(!user)return;
+    if(!isAdminRole(user.role)&&normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Messaging access is required.'});
+    const id=chatConversationId(req.params.id);if(!id)return res.status(400).json({message:'Invalid conversation.'});
+    const conversation=await chatConversationForUser(id,user);if(!conversation)return res.status(404).json({message:'Conversation not found.'});
+    const rows=await dbQuery(`
+      SELECT m.id,m.conversation_id,m.sender_user_id,m.message_text,m.created_at,u.name AS sender_name,u.role AS sender_role
+      FROM orgroom_chat_messages m LEFT JOIN users u ON u.id=m.sender_user_id
+      WHERE m.conversation_id=? ORDER BY m.id ASC
+    `,[id]);
+    res.set('Cache-Control','no-store');
+    res.json({messages:rows.map(m=>({id:Number(m.id),conversationId:Number(m.conversation_id),senderId:m.sender_user_id==null?null:Number(m.sender_user_id),senderName:m.sender_name||'Former account',senderRole:m.sender_role||'FORMER_ACCOUNT',text:m.message_text,createdAt:String(m.created_at)})),unreadCount:await chatUnreadCount(id,user)});
+  }catch(e){console.error('Chat message retrieval failed:',e.message);res.status(500).json({message:'Unable to load conversation messages.'});}
+});
+
+app.post('/api/chat/conversations/:id/messages',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);if(!user)return;
+    if(!isAdminRole(user.role)&&normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Messaging access is required.'});
+    const id=chatConversationId(req.params.id);if(!id)return res.status(400).json({message:'Invalid conversation.'});
+    const conversation=await chatConversationForUser(id,user);if(!conversation)return res.status(404).json({message:'Conversation not found.'});
+    if(!isAdminRole(user.role)&&normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'You cannot send messages.'});
+    const text=String(req.body?.message||'').trim();
+    if(!text)return res.status(400).json({message:'Enter a message before sending.'});
+    if(text.length>CHAT_MESSAGE_MAX_LENGTH)return res.status(400).json({message:`Messages must be ${CHAT_MESSAGE_MAX_LENGTH} characters or fewer.`});
+    const now=Date.now(),history=chatSendTimes.get(Number(user.id))||{lastAt:0,recent:[]};
+    history.recent=history.recent.filter(timestamp=>now-timestamp<60000);
+    if(now-history.lastAt<CHAT_SEND_INTERVAL_MS||history.recent.length>=30)return res.status(429).json({message:'Please wait before sending more messages.'});
+    history.lastAt=now;history.recent.push(now);chatSendTimes.set(Number(user.id),history);
+    const result=await dbQuery('INSERT INTO orgroom_chat_messages (conversation_id,sender_user_id,message_text) VALUES (?,?,?)',[id,Number(user.id),text]);
+    await dbQuery('UPDATE orgroom_chat_conversations SET updated_at=NOW() WHERE id=?',[id]);
+    const message={id:Number(result.insertId),conversation_id:id,sender_user_id:Number(user.id),message_text:text,created_at:new Date().toISOString(),sender_name:user.name,sender_role:user.role};
+    await createChatNotifications(conversation,message,user);
+    res.status(201).json({message:{id:message.id,conversationId:id,senderId:Number(user.id),senderName:user.name,senderRole:user.role,text,createdAt:message.created_at}});
+  }catch(e){console.error('Chat send failed:',e.message);res.status(500).json({message:'Unable to send your message.'});}
+});
+
+app.post('/api/chat/conversations/:id/read',async(req,res)=>{
+  try{
+    const user=await requireAuth(req,res);if(!user)return;
+    if(!isAdminRole(user.role)&&normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Messaging access is required.'});
+    const id=chatConversationId(req.params.id);if(!id)return res.status(400).json({message:'Invalid conversation.'});
+    const conversation=await chatConversationForUser(id,user);if(!conversation)return res.status(404).json({message:'Conversation not found.'});
+    const requestedReadId=Number(req.body?.lastReadMessageId);
+    let latest=null;
+    if(Number.isSafeInteger(requestedReadId)&&requestedReadId>0){
+      latest=(await dbQuery('SELECT MAX(id) AS id FROM orgroom_chat_messages WHERE conversation_id=? AND id<=?',[id,requestedReadId]))[0]?.id||null;
+    }
+    if(latest!==null){
+      await dbQuery(`
+        INSERT INTO orgroom_chat_reads (conversation_id,user_id,last_read_message_id,last_read_at)
+        VALUES (?,?,?,NOW())
+        ON DUPLICATE KEY UPDATE
+          last_read_message_id=GREATEST(COALESCE(last_read_message_id,0),VALUES(last_read_message_id)),
+          last_read_at=NOW()
+      `,[id,Number(user.id),Number(latest)]);
+      await dbQuery(
+        `UPDATE notifications SET is_read=1,read_at=COALESCE(read_at,NOW())
+         WHERE recipient_user_id=? AND event_key LIKE ?
+           AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(event_key,':',3),':',-1) AS UNSIGNED)<=?`,
+        [Number(user.id),`chat:${id}:%:${Number(user.id)}`,Number(latest)]
+      );
+    }
+    res.json({ok:true,unreadCount:await chatUnreadCount(id,user)});
+  }catch(e){console.error('Chat read update failed:',e.message);res.status(500).json({message:'Unable to update message read status.'});}
 });
 
 app.get('/api/notifications',async(req,res)=>{
@@ -592,7 +918,7 @@ app.get('/api/notifications',async(req,res)=>{
     const rows=await dbQuery(`SELECT n.*, r.user_name AS requester_name, r.room_name, r.building, r.reservation_date, r.time_slot FROM notifications n LEFT JOIN reservations r ON r.id=n.reservation_id WHERE n.recipient_user_id=? ORDER BY n.created_at DESC,n.id DESC LIMIT ${limit}`,[user.id]);
     const unreadRows=await dbQuery('SELECT COUNT(*) AS count FROM notifications WHERE recipient_user_id=? AND is_read=0',[user.id]);
     res.set('Cache-Control','no-store');
-    res.json({notifications:rows.map(row=>({id:Number(row.id),type:row.notification_type,reservationId:row.reservation_id==null?null:Number(row.reservation_id),title:row.title,message:row.message,isRead:Boolean(row.is_read),createdAt:String(row.created_at),readAt:row.read_at?String(row.read_at):null,requesterName:row.requester_name||'',roomName:row.room_name||'',building:row.building||'',date:row.reservation_date?String(row.reservation_date).slice(0,10):'',timeSlot:row.time_slot||''})),unreadCount:Number(unreadRows[0]?.count||0)});
+    res.json({notifications:rows.map(row=>({id:Number(row.id),type:row.notification_type,reservationId:row.reservation_id==null?null:Number(row.reservation_id),conversationId:String(row.event_key||'').startsWith('chat:')?Number(String(row.event_key).split(':')[1])||null:null,title:row.title,message:row.message,isRead:Boolean(row.is_read),createdAt:String(row.created_at),readAt:row.read_at?String(row.read_at):null,requesterName:row.requester_name||'',roomName:row.room_name||'',building:row.building||'',date:row.reservation_date?String(row.reservation_date).slice(0,10):'',timeSlot:row.time_slot||''})),unreadCount:Number(unreadRows[0]?.count||0)});
   }catch(e){res.status(500).json({message:'Unable to load notifications.'});}
 });
 
@@ -606,7 +932,7 @@ app.post('/api/notifications/:id/read',async(req,res)=>{
 });
 
 app.get('/api/facilities',async(req,res)=>{try{if(!await requireAuth(req,res))return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const rows=await dbQuery('SELECT * FROM facilities ORDER BY building,name');res.json(rows.map(mapFacility));}catch(e){res.status(500).json({message:'Unable to load facilities.'})}});
-app.get('/api/reservations',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const isAdmin=String(user.role||'').toLowerCase()==='admin';const rows=await dbQuery(`SELECT r.*, f.name AS facility_lookup_name, du.name AS decision_by_name, du.email AS decision_by_email, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms, sr.delivery_status AS start_reminder_status, sr.sent_at AS start_reminder_sent_at, er.delivery_status AS end_reminder_status, er.sent_at AS end_reminder_sent_at FROM reservations r LEFT JOIN facilities f ON f.id=r.facility_id LEFT JOIN users du ON du.id=r.decision_by_user_id LEFT JOIN reservation_reminders sr ON sr.reservation_id=r.id AND sr.reminder_type='START' LEFT JOIN reservation_reminders er ON er.reservation_id=r.id AND er.reminder_type='END' WHERE ?=1 OR r.user_id=? OR (r.user_id IS NULL AND LOWER(r.user_email)=LOWER(?)) ORDER BY r.id DESC`,[isAdmin?1:0,user.id,user.email]);res.json(rows.map(mapReservation));}catch(e){res.status(500).json({message:'Unable to load reservations.'})}});
+app.get('/api/reservations',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const isAdmin=isAdminRole(user.role);const rows=await dbQuery(`SELECT r.*, f.name AS facility_lookup_name, du.name AS decision_by_name, du.email AS decision_by_email, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms, sr.delivery_status AS start_reminder_status, sr.sent_at AS start_reminder_sent_at, er.delivery_status AS end_reminder_status, er.sent_at AS end_reminder_sent_at FROM reservations r LEFT JOIN facilities f ON f.id=r.facility_id LEFT JOIN users du ON du.id=r.decision_by_user_id LEFT JOIN reservation_reminders sr ON sr.reservation_id=r.id AND sr.reminder_type='START' LEFT JOIN reservation_reminders er ON er.reservation_id=r.id AND er.reminder_type='END' WHERE ?=1 OR r.user_id=? OR (r.user_id IS NULL AND LOWER(r.user_email)=LOWER(?)) ORDER BY r.id DESC`,[isAdmin?1:0,user.id,user.email]);res.json(rows.map(mapReservation));}catch(e){res.status(500).json({message:'Unable to load reservations.'})}});
 
 app.get('/api/weekly-room-schedules',async(req,res)=>{try{if(!await requireAuth(req,res))return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const rows=await dbQuery(`SELECT * FROM weekly_room_schedules WHERE is_active=1 AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' ORDER BY facility_id,day_of_week,start_time`);res.json(rows.map(mapWeekly));}catch(e){res.status(500).json({message:'Unable to load recurring room schedules.'})}});
 
@@ -659,7 +985,7 @@ app.get('/api/search',async(req,res)=>{
     const wantsLaboratory=/\b(labs?|laboratory|laboratories)\b/i.test(query);
     const roomTerm=query.replace(/\b(available|availability|free|open|currently|right|now|rooms?|classrooms?|labs?|laboratory|laboratories|in|the|for|and)\b/gi,' ').replace(/\s+/g,' ').trim();
     const roomSearchTerms=(roomTerm||query).replace(/[^\p{L}\p{N}\s]/gu,' ').split(/\s+/).filter(Boolean).slice(0,6);
-    const isAdmin=String(user.role||'').toLowerCase()==='admin';
+    const isAdmin=isAdminRole(user.role);
 
     let facilities;
     if(wantsAvailability && !roomTerm){
@@ -984,8 +1310,8 @@ app.put('/api/room-usage/:reservationId',async(req,res)=>{
 
 app.post('/api/reservations/:id/decision',async(req,res)=>{try{const admin=await requireAdminAuth(req,res);if(!admin)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const decision=String(req.body.status||'').toUpperCase();if(!['APPROVED','REJECTED'].includes(decision))return res.status(400).json({message:'A valid approval decision is required.'});const note=String(req.body.adminNotes||'').slice(0,2000);const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});if(current.status!=='PENDING')return res.status(409).json({message:'This reservation request has already been reviewed.'});if(userOwnsReservation(admin,current))return res.status(403).json({message:'You cannot approve your own reservation request.'});const facilityId=Number(current.facility_id)||null;const key=`${facilityId||current.building+'|'+current.room_name}|${String(current.reservation_date).slice(0,10)}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);const lockedRows=await query('SELECT * FROM reservations WHERE id=? FOR UPDATE',[id]);const locked=lockedRows[0];if(!locked)return null;if(locked.status!=='PENDING')throw Object.assign(new Error('This reservation request has already been reviewed.'),{status:409});if(userOwnsReservation(admin,locked))throw Object.assign(new Error('You cannot approve your own reservation request.'),{status:403});if(decision==='APPROVED')await assertNoConflict({facilityId:Number(locked.facility_id)||null,roomName:locked.room_name,building:locked.building,date:String(locked.reservation_date).slice(0,10),timeSlot:locked.time_slot,excludeId:id,query});await query('UPDATE reservations SET status=?,admin_notes=?,decision_by_user_id=?,decision_at=NOW() WHERE id=?',[decision,note||locked.admin_notes||'',admin.id,id]);const rows=await query(`SELECT r.*, du.name AS decision_by_name, du.email AS decision_by_email, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r LEFT JOIN users du ON du.id=r.decision_by_user_id WHERE r.id=?`,[id]);return mapReservation(rows[0]);});if(!updated)return res.status(404).json({message:'Reservation not found.'});await notifyReservationEvent(updated.dbId,decision==='APPROVED'?'RESERVATION_APPROVED':'RESERVATION_REJECTED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to review reservation.'})}});
 
-app.put('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=String(user.role||'').toLowerCase()==='admin';if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to modify this reservation.'});const requestedStatus=normalizeStatus(req.body.status||current.status);if(isAdmin&&requestedStatus!==current.status)return res.status(403).json({message:'Use the reservation review action to approve or reject a pending request.'});if(!isAdmin&&(current.status!=='PENDING'||requestedStatus!=='PENDING'))return res.status(403).json({message:'Only your pending reservation requests can be edited.'});if(!isAdmin && (req.body.userId||req.body.userEmail||req.body.userName)) return res.status(403).json({message:'Reservation ownership cannot be changed.'});const b={...mapReservation(current),...req.body};const facilityId=Number(b.facilityId||current.facility_id)||null;const facility=facilityId?(await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1',[facilityId]))[0]:null;validateReservationInput({facility,facilityId,roomName:b.roomName,building:b.building,date:b.date,timeSlot:b.timeSlot,attendees:b.attendees,purpose:b.purpose});const key=`${facilityId}|${b.date}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);if(requestedStatus==='PENDING'||requestedStatus==='APPROVED')await assertNoConflict({facilityId,roomName:facility.name,building:facility.building,date:b.date,timeSlot:b.timeSlot,excludeId:id,query});await query(`UPDATE reservations SET room_name=?,building=?,facility_id=?,reservation_date=?,time_slot=?,attendees=?,purpose=?,event_type=?,status=?,admin_notes=?,priority=? WHERE id=?`,[facility.name,facility.building,facility.id,b.date,b.timeSlot,Number(b.attendees),String(b.purpose||'').trim().slice(0,500),String(b.eventType||'').slice(0,100),requestedStatus,isAdmin?String(b.adminNotes||'').slice(0,2000):current.admin_notes||'',isAdmin&&Boolean(b.priority)?1:current.priority?1:0,id]);const rows=await query(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]);return mapReservation(rows[0]);});if(!isAdmin && current.status==='PENDING' && (String(current.room_name)!==String(b.roomName)||String(current.building)!==String(b.building)||String(current.reservation_date).slice(0,10)!==String(b.date)||String(current.time_slot)!==String(b.timeSlot)||String(current.purpose)!==String(b.purpose||'')||String(current.event_type)!==String(b.eventType||'')||Number(current.attendees)!==Number(b.attendees)||Boolean(current.priority)!==Boolean(b.priority))) await notifyReservationEvent(updated.dbId,'RESERVATION_MODIFIED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to update reservation.'})}});
-app.delete('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=String(user.role||'').toLowerCase()==='admin';if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to cancel this reservation.'});if(current.status==='REJECTED'||current.status==='CANCELLED')return res.status(409).json({message:'This reservation is already closed.'});if(!isAdmin&& !['PENDING','APPROVED'].includes(current.status))return res.status(403).json({message:'Only your pending or approved reservation can be cancelled.'});await dbQuery("UPDATE reservations SET status='CANCELLED',decision_by_user_id=?,decision_at=NOW(),admin_notes=CASE WHEN admin_notes IS NULL OR admin_notes='' THEN 'Cancelled by requester.' ELSE admin_notes END WHERE id=?",[user.id,id]);await notifyReservationEvent(id,'RESERVATION_CANCELLED');const row=(await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]))[0];res.json(mapReservation(row));}catch(e){res.status(e.status||500).json({message:e.message||'Unable to cancel reservation.'})}});
+app.put('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to modify this reservation.'});const requestedStatus=normalizeStatus(req.body.status||current.status);if(isAdmin&&requestedStatus!==current.status)return res.status(403).json({message:'Use the reservation review action to approve or reject a pending request.'});if(!isAdmin&&(current.status!=='PENDING'||requestedStatus!=='PENDING'))return res.status(403).json({message:'Only your pending reservation requests can be edited.'});if(!isAdmin && (req.body.userId||req.body.userEmail||req.body.userName)) return res.status(403).json({message:'Reservation ownership cannot be changed.'});const b={...mapReservation(current),...req.body};const facilityId=Number(b.facilityId||current.facility_id)||null;const facility=facilityId?(await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1',[facilityId]))[0]:null;validateReservationInput({facility,facilityId,roomName:b.roomName,building:b.building,date:b.date,timeSlot:b.timeSlot,attendees:b.attendees,purpose:b.purpose});const key=`${facilityId}|${b.date}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);if(requestedStatus==='PENDING'||requestedStatus==='APPROVED')await assertNoConflict({facilityId,roomName:facility.name,building:facility.building,date:b.date,timeSlot:b.timeSlot,excludeId:id,query});await query(`UPDATE reservations SET room_name=?,building=?,facility_id=?,reservation_date=?,time_slot=?,attendees=?,purpose=?,event_type=?,status=?,admin_notes=?,priority=? WHERE id=?`,[facility.name,facility.building,facility.id,b.date,b.timeSlot,Number(b.attendees),String(b.purpose||'').trim().slice(0,500),String(b.eventType||'').slice(0,100),requestedStatus,isAdmin?String(b.adminNotes||'').slice(0,2000):current.admin_notes||'',isAdmin&&Boolean(b.priority)?1:current.priority?1:0,id]);const rows=await query(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]);return mapReservation(rows[0]);});if(!isAdmin && current.status==='PENDING' && (String(current.room_name)!==String(b.roomName)||String(current.building)!==String(b.building)||String(current.reservation_date).slice(0,10)!==String(b.date)||String(current.time_slot)!==String(b.timeSlot)||String(current.purpose)!==String(b.purpose||'')||String(current.event_type)!==String(b.eventType||'')||Number(current.attendees)!==Number(b.attendees)||Boolean(current.priority)!==Boolean(b.priority))) await notifyReservationEvent(updated.dbId,'RESERVATION_MODIFIED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to update reservation.'})}});
+app.delete('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to cancel this reservation.'});if(current.status==='REJECTED'||current.status==='CANCELLED')return res.status(409).json({message:'This reservation is already closed.'});if(!isAdmin&& !['PENDING','APPROVED'].includes(current.status))return res.status(403).json({message:'Only your pending or approved reservation can be cancelled.'});await dbQuery("UPDATE reservations SET status='CANCELLED',decision_by_user_id=?,decision_at=NOW(),admin_notes=CASE WHEN admin_notes IS NULL OR admin_notes='' THEN 'Cancelled by requester.' ELSE admin_notes END WHERE id=?",[user.id,id]);await notifyReservationEvent(id,'RESERVATION_CANCELLED');const row=(await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]))[0];res.json(mapReservation(row));}catch(e){res.status(e.status||500).json({message:e.message||'Unable to cancel reservation.'})}});
 
 async function retryFailedNotificationEmails(){
 if (!emailGatewayUrl || !emailGatewayKey) return;
