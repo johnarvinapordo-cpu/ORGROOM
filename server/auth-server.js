@@ -358,7 +358,7 @@ function profileFromUser(user) {
 }
 
 function mapFacility(row) {
-  return { id: row.id, name: row.name, building: row.building, buildingCode: row.building_code, capacity: row.capacity == null ? null : Number(row.capacity), type: row.type, description: row.description || '', status: row.status || 'AVAILABLE', amenities: Array.isArray(row.amenities) ? row.amenities : (typeof row.amenities === 'string' ? JSON.parse(row.amenities || '[]') : []) };
+  return { id: row.id, name: row.name, building: row.building, buildingCode: row.building_code, capacity: row.capacity == null ? null : Number(row.capacity), type: row.type, description: row.description || '', imageUrl: row.image_url || row.imageUrl || '', status: row.status || 'AVAILABLE', amenities: Array.isArray(row.amenities) ? row.amenities : (typeof row.amenities === 'string' ? JSON.parse(row.amenities || '[]') : []) };
 }
 function mapReservation(row) {
   return { id: `OR-${String(row.id).padStart(3,'0')}`, dbId: Number(row.id), userId: row.user_id == null ? null : Number(row.user_id), userName: row.user_name, userEmail: row.user_email, userRole: row.user_role, orgName: row.organization_name, roomName: row.room_name, building: row.building, facilityId: row.facility_id, date: String(row.reservation_date).slice(0,10), timeSlot: row.time_slot, attendees: Number(row.attendees), purpose: row.purpose, eventType: row.event_type, status: row.status, submittedAt: String(row.submitted_at), adminNotes: row.admin_notes || '', decisionByUserId: row.decision_by_user_id == null ? null : Number(row.decision_by_user_id), decisionByName: row.decision_by_name || '', decisionByEmail: row.decision_by_email || '', decisionAt: row.decision_at ? String(row.decision_at) : null, priority: Boolean(row.priority), startMs: row.start_ms == null ? null : Number(row.start_ms), endMs: row.end_ms == null ? null : Number(row.end_ms), startReminderStatus: row.start_reminder_status || 'PENDING', startReminderSentAt: row.start_reminder_sent_at ? String(row.start_reminder_sent_at) : null, endReminderStatus: row.end_reminder_status || 'PENDING', endReminderSentAt: row.end_reminder_sent_at ? String(row.end_reminder_sent_at) : null };
@@ -512,11 +512,20 @@ app.get('/api/users', async(req,res)=>{
   try{
     const admin=await requireAdminAuth(req,res);
     if(!admin) return;
-    const rows=await dbQuery(`
-      SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at
-      FROM users
-      ORDER BY CASE WHEN UPPER(role)='SUPER_ADMIN' THEN 0 WHEN UPPER(role)='ADMIN' THEN 1 ELSE 2 END, name ASC, id ASC
-    `);
+    // Regular Admins must never receive Admin or Super Admin account records.
+    // The actor comes from the authenticated session, not a client-supplied role.
+    const rows=isSuperAdminRole(admin.role)
+      ? await dbQuery(`
+          SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at
+          FROM users
+          ORDER BY CASE WHEN UPPER(role)='SUPER_ADMIN' THEN 0 WHEN UPPER(role)='ADMIN' THEN 1 ELSE 2 END, name ASC, id ASC
+        `)
+      : await dbQuery(`
+          SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at
+          FROM users
+          WHERE UPPER(role)='TEACHER'
+          ORDER BY name ASC, id ASC
+        `);
     res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json(rows.map(row=>({
       id:Number(row.id),
@@ -571,6 +580,7 @@ app.post('/api/users', async(req,res)=>{
     if(!name) return res.status(400).json({message:'Full name is required.'});
     if(!allowedEmail(email)) return res.status(400).json({message:'Only @gmail.com and @cmdi.edu.ph accounts are allowed.'});
     if(!['TEACHER','ADMIN'].includes(role)) return res.status(400).json({message:'Only Teacher and Admin accounts can be created here. SUPER_ADMIN accounts must use the secure one-time provisioning command.'});
+    if(role==='ADMIN' && !isSuperAdminRole(admin.role)) return res.status(403).json({message:'Only the Super Admin can create Admin accounts.'});
     if(!strongPassword(password)) return res.status(400).json({message:'Password must be at least 8 characters and contain a letter and a number.'});
 
     const passwordHash=await bcrypt.hash(password,12);

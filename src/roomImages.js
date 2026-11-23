@@ -67,7 +67,10 @@ function placeholderForRoom(room = {}) {
 export function getRoomImage(room = {}) {
   const roomId = String(room.id ?? '').trim();
   const placeholder = ROOM_PLACEHOLDER_BY_ID[roomId] || placeholderForRoom(room);
-  const realImage = ROOM_IMAGE_BY_ID[roomId];
+  // Prefer the image URL saved on the facility record in MySQL.
+  // Keep the ID registry as a backward-compatible fallback for older records.
+  const databaseImage = String(room.imageUrl || room.image_url || '').trim();
+  const realImage = databaseImage || ROOM_IMAGE_BY_ID[roomId];
 
   return {
     src: realImage || placeholder,

@@ -10,6 +10,7 @@ import {
 import RoomImage from './RoomImage.jsx';
 import ChatWidget from './ChatWidget.jsx';
 import './styles.css';
+import './calm-campus.css';
 
 const API = import.meta.env.VITE_API_URL || '';
 const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
@@ -170,36 +171,35 @@ function Auth({onLogin}){
     finally{submitLock.current=false;setBusy(false);}
   };
 
-  const title=mode==='login'&&step==='code'?'Verify your email':mode==='login'?'Welcome back':'Reset your password';
+  const title=mode==='login'&&step==='code'?'Verify your email':mode==='login'?'Welcome Back':'Reset your password';
   return (
     <div className="auth-page">
       <div className="auth-art">
-        <div className="brand brand-lg"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Campus space management</span></div></div>
+        <div className="brand brand-lg"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Facility Reservation Platform</span></div></div>
         <div className="art-copy">
-          <span className="eyebrow">CAMPUS OPERATIONS</span>
-          <h1>Find a room.<br/><em>Make it happen.</em></h1>
-          <p>One clean workspace for room availability, reservations, schedules, and approvals.</p>
-          <div className="art-stats"><div><strong>24/7</strong><span>Availability view</span></div><div><strong>1</strong><span>Campus workspace</span></div><div><strong>3</strong><span>Access levels</span></div></div>
+          <span className="eyebrow">CARD-MRI DEVELOPMENT INSTITUTE, INC.</span>
+          <h1>Campus spaces,<br/><em>made easier to manage.</em></h1>
+          <p>Find available rooms, check schedules, and manage reservations.</p>
         </div>
       </div>
       <div className="auth-card">
-        <div className="mobile-brand brand"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Campus space management</span></div></div>
+        <div className="mobile-brand brand"><div className="brand-mark"><DoorOpen/></div><div><b>ORGROOM</b><span>Facility Reservation Platform</span></div></div>
         <div className="auth-head">
-          <span className="eyebrow">SECURE ACCESS</span>
+          <span className="eyebrow">SECURE CAMPUS ACCESS</span>
           <h2>{title}</h2>
-          <p>{mode==='login'&&step==='code'?'We sent a verification code to your email address. Enter it below to continue.':mode==='login'?'Sign in to manage your campus space.':'We will verify your email before changing the password.'}</p>
+          <p>{mode==='login'&&step==='code'?'We sent a verification code to your email address. Enter it below to continue.':mode==='login'?'Sign in with your registered account to access the ORGROOM facility reservation portal.':'We will verify your email before changing the password.'}</p>
         </div>
         <form className="auth-action-form" onSubmit={e=>{e.preventDefault();if(!busy)submit();}}>
         {error&&<div className="alert danger"><CircleAlert/>{error}</div>}
         {info&&<div className="alert success"><CheckCircle2/>{info}</div>}
         {mode==='login'&&step==='form'&&(
           <div className="form-stack">
-            <label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@gmail.com" type="email" autoComplete="username" required/></label>
+            <label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@cmdi.edu.ph" type="email" autoComplete="username" required/></label>
             <label>Password<div className="input-icon"><LockKeyhole/><input value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" type={show?'text':'password'} autoComplete="current-password" required/><button type="button" onClick={()=>setShow(!show)}>{show?<EyeOff/>:<Eye/>}</button></div></label>
             <button type="button" className="link-button" onClick={()=>{setMode('forgot');reset();}}>Forgot password?</button>
           </div>
         )}
-        {mode==='forgot'&&step==='form'&&<div className="form-stack"><label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@gmail.com" type="email"/></label></div>}
+        {mode==='forgot'&&step==='form'&&<div className="form-stack"><label>Email<input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@cmdi.edu.ph" type="email"/></label></div>}
         {mode==='login'&&step==='code'&&(
           <div className="form-stack">
             <label>Verification code<input className="code-input" value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,'').slice(0,6))} placeholder="000000" maxLength={6}/></label>
@@ -985,296 +985,109 @@ function Overview({
   rooms,
   reservations,
   setTab
-}){
+}) {
+  const mine = hasAdminAccess(user.role)
+    ? reservations
+    : reservations.filter(r => r.userEmail === user.email);
 
-  const mine =
-    hasAdminAccess(user.role)
-      ? reservations
-      : reservations.filter(
-          r=>r.userEmail===user.email
-        );
-
-  const approved =
-    mine.filter(
-      r=>r.status==='APPROVED'
-    ).length;
-
-  const pending =
-    mine.filter(
-      r=>r.status==='PENDING'
-    ).length;
-
-  const available =
-    rooms.filter(
-      r=>r.status==='AVAILABLE'
-    ).length;
+  const count = status => mine.filter(r => String(r.status || '').toUpperCase() === status).length;
+  const pending = count('PENDING');
+  const approved = count('APPROVED');
+  const rejected = count('REJECTED');
+  const expired = count('EXPIRED');
+  const total = mine.length;
+  const statusTotal = Math.max(total, 1);
+  const recent = [...mine].sort((a, b) =>
+    String(b.date || '').localeCompare(String(a.date || '')) ||
+    String(b.id || '').localeCompare(String(a.id || ''))
+  ).slice(0, 5);
 
   return (
-    <div className="page">
-
-      <div className="welcome">
-
+    <div className="page reference-dashboard">
+      <div className="welcome reference-welcome">
         <div>
-
-          <span className="eyebrow">
-            GOOD TO SEE YOU
-          </span>
-
-          <h2>
-            {
-              hasAdminAccess(user.role)
-                ? 'Operations overview'
-                : `Hello, ${user.name.split(' ')[0]}.`
-            }
-          </h2>
-
-          <p>
-            {
-              hasAdminAccess(user.role)
-                ? 'Monitor room demand and keep campus requests moving.'
-                : 'Everything you need to find a space and keep track of your requests.'
-            }
-          </p>
-
+          <span className="eyebrow">CAMPUS WORKSPACE</span>
+          <h2>{`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}`}</h2>
+          <p>Here is what is happening with your room requests.</p>
         </div>
-
-
-        <button
-          className="primary-btn"
-          onClick={()=>setTab('rooms')}
-        >
-          <Plus/>
-          New reservation
+        <button className="primary-btn" onClick={() => setTab('rooms')}>
+          <Plus /> Reserve a room
         </button>
-
       </div>
 
-
-      <div className="stats-grid">
-
-        <Stat
-          icon={DoorOpen}
-          label="Available rooms"
-          value={available}
-          detail={`of ${rooms.length} facilities`}
-          tone="green"
-        />
-
-        <Stat
-          icon={ClipboardList}
-          label={
-            hasAdminAccess(user.role)
-              ? 'All requests'
-              : 'My requests'
-          }
-          value={mine.length}
-          detail={`${pending} awaiting action`}
-          tone="blue"
-        />
-
-        <Stat
-          icon={CheckCircle2}
-          label="Approved"
-          value={approved}
-          detail="confirmed reservations"
-          tone="purple"
-        />
-
-        <Stat
-          icon={CalendarCheck2}
-          label="Today"
-          value={
-            reservations.filter(
-              r=>r.date===new Date().toISOString().slice(0,10)
-            ).length
-          }
-          detail="reservations on campus"
-          tone="orange"
-        />
-
+      <div className="stats-grid reference-stats">
+        <div className="stat-card reference-stat pending">
+          <div className="stat-icon"><Clock3 /></div>
+          <div><strong>{pending}</strong><span>Pending</span></div>
+        </div>
+        <div className="stat-card reference-stat approved">
+          <div className="stat-icon"><CheckCircle2 /></div>
+          <div><strong>{approved}</strong><span>Approved</span></div>
+        </div>
+        <div className="stat-card reference-stat rejected">
+          <div className="stat-icon"><XCircle /></div>
+          <div><strong>{rejected}</strong><span>Rejected</span></div>
+        </div>
+        <div className="stat-card reference-stat expired">
+          <div className="stat-icon"><Info /></div>
+          <div><strong>{expired}</strong><span>Expired</span></div>
+        </div>
       </div>
 
-
-      <div className="two-col">
-
-        <section className="panel">
-
+      <div className="reference-dashboard-grid">
+        <section className="panel reference-recent-panel">
           <div className="panel-head">
-
-            <div>
-              <h3>
-                {
-                  hasAdminAccess(user.role)
-                    ? 'Recent requests'
-                    : 'My recent requests'
-                }
-              </h3>
-
-              <p>
-                Latest reservation activity
-              </p>
-            </div>
-
-            <button
-              className="text-btn"
-              onClick={()=>
-                setTab(
-                  hasAdminAccess(user.role)
-                    ? 'requests'
-                    : 'reservations'
-                )
-              }
-            >
-              View all
-              <ChevronRight/>
-            </button>
-
+            <div><h3>Recent reservations</h3><p>Your latest room reservation activity</p></div>
+            <button className="text-btn" onClick={() => setTab(hasAdminAccess(user.role) ? 'requests' : 'reservations')}>View all <ChevronRight /></button>
           </div>
-
-
-          {mine.slice(0,5).map(r=>(
-            <div
-              className="list-row"
-              key={r.id}
-            >
-
-              <div className="row-icon">
-                <DoorOpen/>
-              </div>
-
-              <div className="row-main">
-                <b>{r.roomName}</b>
-                <span>
-                  {r.building} · {prettyDate(r.date)} · {r.timeSlot}
-                </span>
-              </div>
-
-              <Status value={r.status}/>
-
+          {recent.length ? (
+            <div className="reference-table-wrap">
+              <table className="reference-reservations-table">
+                <thead><tr><th>Room</th><th>Activity</th><th>Schedule</th><th>Status</th></tr></thead>
+                <tbody>
+                  {recent.map(r => (
+                    <tr key={r.id}>
+                      <td><b>{r.roomName || r.name || 'Room'}</b><small>{r.building || 'Campus facility'}</small></td>
+                      <td><b>{r.orgName || r.eventType || 'Reservation'}</b><small>{r.purpose || r.eventType || 'Room booking'}</small></td>
+                      <td><b>{prettyDate(r.date)}</b><small>{r.timeSlot || 'Time not specified'}</small></td>
+                      <td><Status value={r.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-
-
-          {!mine.length && (
-            <Empty
-              icon={ClipboardList}
-              text="No reservations yet."
-              action="Find a room"
-              onClick={()=>setTab('rooms')}
-            />
+          ) : (
+            <Empty icon={ClipboardList} text="No reservations yet." action="Browse available rooms" onClick={() => setTab('rooms')} />
           )}
-
         </section>
 
+        <div className="reference-side-panels">
+          <section className="panel reference-quick-panel">
+            <div className="panel-head"><div><h3>Quick actions</h3><p>Jump to common tasks</p></div><Sparkles /></div>
+            <button className="reference-action" onClick={() => setTab('rooms')}><DoorOpen /><b>Browse available rooms</b><ChevronRight /></button>
+            <button className="reference-action secondary" onClick={() => setTab('calendar')}><CalendarDays /><b>Open calendar</b><ChevronRight /></button>
+          </section>
 
-        <section className="panel highlight-panel">
-
-          <div className="panel-head">
-
-            <div>
-              <h3>Quick access</h3>
-              <p>Jump to common tasks</p>
+          <section className="panel reference-summary-panel">
+            <div className="panel-head"><div><h3>Status summary</h3></div></div>
+            <div className="reference-status-bar" aria-label="Reservation status distribution">
+              <span className="approved" style={{width:`${approved / statusTotal * 100}%`}} />
+              <span className="pending" style={{width:`${pending / statusTotal * 100}%`}} />
+              <span className="rejected" style={{width:`${rejected / statusTotal * 100}%`}} />
+              <span className="expired" style={{width:`${expired / statusTotal * 100}%`}} />
             </div>
-
-            <Sparkles/>
-
-          </div>
-
-
-          <button
-            className="quick-card"
-            onClick={()=>setTab('rooms')}
-          >
-            <div>
-              <DoorOpen/>
-              <b>Explore rooms</b>
-              <span>Browse facilities and capacity</span>
+            <div className="reference-status-list">
+              <div><span><i className="approved" />Approved</span><b>{approved}</b></div>
+              <div><span><i className="pending" />Pending</span><b>{pending}</b></div>
+              <div><span><i className="rejected" />Rejected</span><b>{rejected}</b></div>
+              <div><span><i className="expired" />Expired</span><b>{expired}</b></div>
             </div>
-
-            <ChevronRight/>
-          </button>
-
-
-          <button
-            className="quick-card"
-            onClick={()=>setTab('calendar')}
-          >
-            <div>
-              <CalendarDays/>
-              <b>Check calendar</b>
-              <span>See scheduled room activity</span>
-            </div>
-
-            <ChevronRight/>
-          </button>
-
-
-          <button
-            className="quick-card"
-            onClick={()=>setTab('reservations')}
-          >
-            <div>
-              <ClipboardList/>
-              <b>My reservations</b>
-              <span>Track your requests and reservation status</span>
-            </div>
-
-            <ChevronRight/>
-          </button>
-
-        </section>
-
+          </section>
+        </div>
       </div>
-
-
-      {hasAdminAccess(user.role) && (
-        <section className="panel">
-
-          <div className="panel-head">
-
-            <div>
-              <h3>Facility snapshot</h3>
-              <p>Current room status</p>
-            </div>
-
-            <button
-              className="text-btn"
-              onClick={()=>setTab('rooms')}
-            >
-              Open rooms
-              <ChevronRight/>
-            </button>
-
-          </div>
-
-
-          <div className="mini-grid">
-
-            {rooms.slice(0,8).map(r=>(
-              <div
-                className="mini-room"
-                key={r.id}
-              >
-
-                <div>
-                  <b>{r.name}</b>
-                  <span>{r.building}</span>
-                </div>
-
-                <Status value={r.status}/>
-
-              </div>
-            ))}
-
-          </div>
-
-        </section>
-      )}
-
     </div>
   );
 }
-
 
 /* ============================================================
    ADMIN DASHBOARD
@@ -1300,8 +1113,8 @@ function AdminDashboard({
   return (
     <div className="page admin-page">
 
-      <section className="admin-welcome">
-        <div>
+      <section className="admin-welcome admin-campus-welcome">
+        <div className="admin-welcome-copy">
           <span className="eyebrow">ADMINISTRATION</span>
           <h2>Operations control center</h2>
           <p>Monitor campus room activity, review requests, and keep reservations moving.</p>
@@ -4187,7 +4000,7 @@ function UserManagement({initialSearch='',currentUser}){
 
   return (
     <div className="page user-management-page">
-      <div className="page-head"><div><span className="eyebrow">{actorIsSuperAdmin?'SUPER ADMIN':'ADMIN'} ONLY</span><h2>User Management</h2><p>Create and manage Teacher and Admin accounts. Super Admin accounts are protected from routine account changes.</p></div></div>
+      <div className="page-head"><div><span className="eyebrow">{actorIsSuperAdmin?'SUPER ADMIN':'ADMIN'} ONLY</span><h2>User Management</h2><p>{actorIsSuperAdmin?'Create and manage Teacher and Admin accounts. Super Admin accounts are protected from routine account changes.':'Create and manage Teacher accounts only.'}</p></div></div>
       <section className="account-capacity-panel" aria-live="polite">
         <div className="account-capacity-copy">
           <strong>{capacity?`${capacity.currentCount} / ${capacity.maxAccounts} Accounts Used`:'Loading account capacity…'}</strong>
@@ -4204,14 +4017,14 @@ function UserManagement({initialSearch='',currentUser}){
           <div className="form-stack">
             <label>Full name<input value={form.name} onChange={e=>setForm(v=>({...v,name:e.target.value}))} placeholder="Juan Dela Cruz" autoComplete="name"/></label>
             <label>Email<input value={form.email} onChange={e=>setForm(v=>({...v,email:e.target.value}))} placeholder="name@gmail.com" type="email" autoComplete="email"/></label>
-            <label>Role<select value={role} onChange={e=>setRole(e.target.value)}><option value="TEACHER">Teacher</option><option value="ADMIN">Admin</option></select></label>
+            <label>Role<select value={role} onChange={e=>setRole(e.target.value)}><option value="TEACHER">Teacher</option>{actorIsSuperAdmin&&<option value="ADMIN">Admin</option>}</select></label>
             <label>Initial password<input value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))} placeholder="At least 8 characters" type="password" autoComplete="new-password"/><small className="field-help">At least 8 characters with a letter and a number. Passwords are stored as hashes.</small></label>
             <button className="primary-btn" disabled={saving||!capacity||capacity.remainingSlots<=0} onClick={submit}><Plus/>{saving?'Creating account…':capacity?.remainingSlots<=0?'Account capacity reached':`Create ${role==='ADMIN'?'Admin':'Teacher'} Account`}</button>
           </div>
         </section>
         <section className="panel user-list-panel">
           <div className="panel-head"><div><h3>Existing accounts</h3><p>{capacity?`${capacity.currentCount} total account${capacity.currentCount===1?'':'s'} in the database, including inactive accounts.`:`${users.length} account${users.length===1?'':'s'} loaded.`}</p></div><button className="icon-btn" onClick={loadUsers} disabled={loading} title="Refresh users" aria-label="Refresh users"><RefreshCw className={loading?'spin':''}/></button></div>
-          <div className="user-search"><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, email, or role"/><select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)} aria-label="Filter accounts by role"><option value="ALL">All roles</option><option value="SUPER_ADMIN">Super Admin</option><option value="ADMIN">Admin</option><option value="TEACHER">Teacher</option></select></div>
+          <div className="user-search"><Search/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, email, or role"/><select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)} aria-label="Filter accounts by role"><option value="ALL">{actorIsSuperAdmin?'All roles':'All teachers'}</option>{actorIsSuperAdmin&&<><option value="SUPER_ADMIN">Super Admin</option><option value="ADMIN">Admin</option></>}<option value="TEACHER">Teacher</option></select></div>
           {loading?<div className="user-empty"><RefreshCw className="spin"/><span>Loading accounts…</span></div>:!filtered.length?<div className="user-empty"><Users/><b>No matching accounts</b><span>Try another search or role filter.</span></div>:(
             <div className="user-table-wrap"><table className="user-table">
               <thead><tr><th>User</th><th>Role</th><th>Account</th><th>Verification</th><th>Created</th><th>Actions</th></tr></thead>
@@ -4242,6 +4055,45 @@ function UserManagement({initialSearch='',currentUser}){
   );
 }
 
+function StartupScreen({theme='light',status='checking',onRetry}){
+  const isError=status==='error';
+  const isWelcome=status==='welcome';
+  return (
+    <div className={`orgroom-startup ${theme==='dark'?'dark-mode':''} ${isWelcome?'is-welcome':''}`} role="status" aria-live="polite">
+      <div className="startup-card">
+        <div className="startup-brand-mark"><DoorOpen aria-hidden="true"/></div>
+        <div className="startup-brand-name">ORGROOM</div>
+        <div className="startup-brand-subtitle">Facility Reservation Platform</div>
+        {isError ? (
+          <>
+            <h1>We couldn’t prepare your workspace</h1>
+            <p>ORGROOM could not load the information needed to start. Check your connection and try again.</p>
+            <button type="button" className="startup-retry" onClick={onRetry}><RefreshCw/> Try again</button>
+          </>
+        ) : (
+          <>
+            <h1>{isWelcome?'Welcome to ORGROOM':status==='checking'?'Restoring your session':'Preparing your campus workspace...'}</h1>
+            <p>{isWelcome?'Your account is verified. Preparing the workspace assigned to your role…':status==='checking'?'Securely checking your ORGROOM account…':'Loading your campus information…'}</p>
+            <div className="startup-progress" aria-label="Loading"><span/></div>
+          </>
+        )}
+      </div>
+      <div className="startup-footer">CARD-MRI DEVELOPMENT INSTITUTE, INC.</div>
+    </div>
+  );
+}
+
+function LogoutTransition({theme='light'}){
+  return (
+    <div className={`orgroom-transition-screen ${theme==='dark'?'dark-mode':''}`} role="status" aria-live="polite">
+      <div className="transition-mark"><DoorOpen aria-hidden="true"/></div>
+      <strong>ORGROOM</strong>
+      <span>Signing you out securely…</span>
+      <div className="transition-track"><i/></div>
+    </div>
+  );
+}
+
 /* ============================================================
    MAIN APP
    ============================================================ */
@@ -4259,6 +4111,11 @@ export default function App(){
 
   const [user,setUser]=useState(null);
   const [authChecked,setAuthChecked]=useState(false);
+  const [startupStatus,setStartupStatus]=useState('checking');
+  const [startupAttempt,setStartupAttempt]=useState(0);
+  const [startupMinimumElapsed,setStartupMinimumElapsed]=useState(false);
+  const [loginTransition,setLoginTransition]=useState(false);
+  const [logoutTransition,setLogoutTransition]=useState(false);
   const [tab,setTab]=useState('home');
   const [rooms,setRooms]=useState([]);
   const [reservations,setReservations]=useState([]);
@@ -4279,6 +4136,14 @@ export default function App(){
       localStorage.setItem('orgroom-sidebar-collapsed', String(sidebarCollapsed));
     }catch{}
   },[sidebarCollapsed]);
+
+  // Keep the branded first-load experience visible for about 2.2 seconds,
+  // but never hide a slower authentication or data initialization behind it.
+  useEffect(()=>{
+    const timer=setTimeout(()=>setStartupMinimumElapsed(true),2200);
+    return()=>clearTimeout(timer);
+  },[]);
+
   const [booking,setBooking]=useState(null);
   const openBooking=(room,date=null)=>setBooking({room,initialDate:date||localTodayISO()});
   const [editing,setEditing]=useState(null);
@@ -4411,7 +4276,8 @@ export default function App(){
       const data=await api('/api/notifications?limit=40');
       setNotifications(data.notifications||[]);
       setUnreadNotifications(Number(data.unreadCount||0));
-    }catch{}
+      return true;
+    }catch{return false;}
   };
 
   const load=async()=>{
@@ -4435,10 +4301,12 @@ export default function App(){
       setReservations(rs);
       setWeekly(w);
       setError('');
+      return true;
 
     }catch(e){
 
-      setError(e.message);
+      setError(e.message||'Unable to load ORGROOM data.');
+      return false;
 
     }finally{
 
@@ -4448,20 +4316,32 @@ export default function App(){
   };
 
 
-  useEffect(
-    ()=>{
-      if(!user) return;
-
-      load();
-      loadNotifications();
-
-      const t=setInterval(load,10000);
-      const n=setInterval(loadNotifications,15000);
-
-      return ()=>{clearInterval(t);clearInterval(n);};
-    },
-    [user]
-  );
+  useEffect(()=>{
+    if(!authChecked) return;
+    if(!user){
+      setStartupStatus('ready');
+      return;
+    }
+    let cancelled=false;
+    let dataTimer=null;
+    let notificationTimer=null;
+    const initialize=async()=>{
+      setStartupStatus('loading');
+      const [dataLoaded]=await Promise.all([load(),loadNotifications()]);
+      if(cancelled) return;
+      setStartupStatus(dataLoaded?'ready':'error');
+      if(dataLoaded){
+        dataTimer=setInterval(load,10000);
+        notificationTimer=setInterval(loadNotifications,15000);
+      }
+    };
+    initialize();
+    return()=>{
+      cancelled=true;
+      if(dataTimer)clearInterval(dataTimer);
+      if(notificationTimer)clearInterval(notificationTimer);
+    };
+  },[user,authChecked,startupAttempt]);
 
 
   const saveEdit=async(form)=>{
@@ -4589,15 +4469,49 @@ export default function App(){
     setTab('search-results');
   };
 
-  if(!authChecked){
-    return <div className="auth-page"><div className="auth-card"><div className="auth-head"><span className="eyebrow">ORGROOM</span><h2>Restoring your session…</h2><p>Please wait while we securely reconnect your account.</p></div></div></div>;
+  const handleLoginSuccess=authenticatedUser=>{
+    // Auth calls this only after the existing login / verification API succeeds.
+    setLoginTransition(true);
+    setStartupStatus('loading');
+    setUser(authenticatedUser);
+    window.setTimeout(()=>setLoginTransition(false),2000);
+  };
+
+  const performLogout=async()=>{
+    // Do not show the logout transition or clear client state until the server
+    // confirms that the current session token has been invalidated.
+    await api('/api/auth/logout',{method:'POST'});
+    try{localStorage.removeItem('orgroom-session');}catch{}
+    setLogoutTransition(true);
+    // Immediately remove the authenticated application tree after server
+    // invalidation; the branded transition remains above the login screen.
+    setUser(null);
+    setTab('home');
+    setLoginTransition(false);
+    navigationHistory.current.initialized=false;
+    navigationHistory.current.lastTab='home';
+    window.history.replaceState(null,document.title,`${window.location.pathname}${window.location.search}`);
+    await new Promise(resolve=>window.setTimeout(resolve,1900));
+    setLogoutTransition(false);
+    setConfirmation(null);
+  };
+
+  const retryStartup=()=>{
+    setStartupStatus('loading');
+    setStartupAttempt(value=>value+1);
+  };
+
+  if(!authChecked || !startupMinimumElapsed || (user && (startupStatus!=='ready' || loginTransition))){
+    const visibleStatus=startupStatus==='error'?'error':loginTransition?'welcome':startupStatus;
+    return <StartupScreen theme={theme} status={visibleStatus} onRetry={retryStartup}/>;
   }
 
-  if(!user){
+  if(logoutTransition) return <LogoutTransition theme={theme}/>;
 
+  if(!user){
     return (
       <Auth
-        onLogin={setUser}
+        onLogin={handleLoginSuccess}
       />
     );
   }
@@ -4748,7 +4662,7 @@ export default function App(){
     content=(
       <Profile
         user={user}
-        onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:async()=>{await api('/api/auth/logout',{method:'POST'});try{localStorage.removeItem('orgroom-session');}catch{}setUser(null);setTab('home');}})}
+        onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:performLogout})}
       />
     );
 
@@ -4762,7 +4676,7 @@ export default function App(){
           tab={tab}
           setTab={setTab}
           user={user}
-          onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:async()=>{await api('/api/auth/logout',{method:'POST'});try{localStorage.removeItem('orgroom-session');}catch{}setUser(null);setTab('home');}})}
+          onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:performLogout})}
           mobileOpen={mobile}
           setMobileOpen={setMobile}
           sidebarCollapsed={sidebarCollapsed}
@@ -4773,7 +4687,7 @@ export default function App(){
           tab={tab}
           setTab={setTab}
           user={user}
-          onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:async()=>{await api('/api/auth/logout',{method:'POST'});try{localStorage.removeItem('orgroom-session');}catch{}setUser(null);setTab('home');}})}
+          onLogout={()=>requestConfirmation({title:'Log out of ORGROOM?',description:'Are you sure you want to log out of your account?',confirmLabel:'LOG OUT',severity:'normal',action:performLogout})}
           mobileOpen={mobile}
           setMobileOpen={setMobile}
           sidebarCollapsed={sidebarCollapsed}
@@ -4826,7 +4740,9 @@ export default function App(){
         )}
 
 
-        {content}
+        <div key={tab} className="orgroom-page-transition">
+          {content}
+        </div>
 
       </main>
 

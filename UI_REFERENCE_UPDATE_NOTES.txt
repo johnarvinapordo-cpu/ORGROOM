@@ -1,0 +1,15 @@
+ORGROOM UI REFINEMENT — BUTTON AND HEADER POSITIONS
+
+This update refines the desktop header and sidebar control positions to follow the supplied light-mode reference screenshot in both themes.
+
+Changes:
+- Global search is positioned at the right side of the top header, before the theme and notification controls.
+- Theme and notification buttons use the compact 30px sizing and spacing shown in the reference.
+- The refresh control and duplicate top-header user identity are hidden in the desktop header; the user identity remains in the sidebar footer as shown in the reference.
+- The desktop sidebar collapse control is hidden to match the reference sidebar, while the existing responsive/mobile navigation behavior remains in place.
+- The dashboard's Reserve a room button remains aligned to the upper-right of the welcome section.
+- These positions are shared by light and dark mode; only theme colors change.
+
+Only src/calm-campus.css was changed in this refinement. Application logic, navigation destinations, reservation behavior, and database/API code were not changed.
+
+The included preview images are visual mockups based on the supplied reference dimensions and the updated theme/layout tokens; they are not live application screenshots.
