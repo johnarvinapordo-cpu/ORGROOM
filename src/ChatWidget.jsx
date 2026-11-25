@@ -1,16 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatManilaTime, formatManilaDateTime } from './utils/time.js';
 import { MessageCircle, X, Send, ChevronLeft, Volume2, VolumeX, MessageSquare, BellRing } from 'lucide-react';
 
-function shortTime(value){
-  const date=new Date(value);
-  if(!Number.isFinite(date.getTime())) return '';
-  return date.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'});
-}
-function fullTime(value){
-  const date=new Date(value);
-  if(!Number.isFinite(date.getTime())) return '';
-  return date.toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-}
+function shortTime(value){ return formatManilaTime(value); }
+function fullTime(value){ return formatManilaDateTime(value); }
 
 export default function ChatWidget({api,user,theme='light',open,onOpenChange,selectedConversationId,onSelectConversation}){
   const isAdmin=['ADMIN','SUPER_ADMIN'].includes(String(user?.role||'').toUpperCase());

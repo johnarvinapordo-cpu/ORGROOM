@@ -108,3 +108,7 @@ npm run dev
 ```
 
 Configure the same `.env` database and email settings already required by ORGROOM. Do not copy production secrets into source control.
+
+## Super Admin authority update
+
+The current implementation includes the Super Admin approval hierarchy, automatic validation-backed approval for Super Admin reservations, reason-required audited decision overrides, role identity in Profile, global settings, facility and weekly schedule controls, database-backed reports, and read-only audit/decision history. See `SUPER_ADMIN_AUTHORITY_UPDATE.md` for the role matrix, additive database migration, and local test instructions. The migration is also initialized additively by the backend's existing database setup routine.

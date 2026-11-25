@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays, ChevronLeft, ChevronRight, Clock3, DoorOpen, LayoutDashboard,
-  LogOut, Menu, Search, Settings, ShieldCheck, UserRound, Users, Building2,
+  LogOut, Menu, Search, Settings, ShieldCheck, UserRound, Users, Building2, Crown,
   CheckCircle2, XCircle, CircleAlert, Plus, Trash2, Pencil, SlidersHorizontal,
   ClipboardList, GraduationCap, BarChart3, Sparkles, Mail, LockKeyhole, Eye,
   EyeOff, RefreshCw, CalendarCheck2, MapPin, Wifi, Monitor, Wind, Armchair,
@@ -9,6 +9,15 @@ import {
 } from 'lucide-react';
 import RoomImage from './RoomImage.jsx';
 import ChatWidget from './ChatWidget.jsx';
+import SuperAdminConsole from './SuperAdminConsole.jsx';
+import { parseApiTimestamp, formatManilaTime, formatManilaDate, formatManilaDateTime, manilaTodayISO, manilaCurrentMinutes } from './utils/time.js';
+import {
+  RESERVATION_WINDOW_START_MINUTES,
+  RESERVATION_WINDOW_END_MINUTES,
+  RESERVATION_WINDOW_MESSAGE,
+  RESERVATION_WINDOW_SYNC_ERROR,
+  isWithinReservationWindow
+} from '../shared/reservation-window.js';
 import './styles.css';
 import './calm-campus.css';
 
@@ -62,6 +71,19 @@ const hasAdminAccess = role => ['admin','super_admin'].includes(String(role||'')
 const isSuperAdmin = role => String(role||'').toLowerCase()==='super_admin';
 const displayRole = role => isSuperAdmin(role)?'Super Admin':String(role||'').toLowerCase()==='admin'?'Admin':'Teacher';
 
+function RoleIdentity({role}){
+  const normalized=String(role||'teacher').toLowerCase();
+  const superAdmin=normalized==='super_admin';
+  const admin=normalized==='admin';
+  const Icon=superAdmin?Crown:admin?ShieldCheck:GraduationCap;
+  const label=displayRole(normalized);
+  const description=superAdmin?'Highest system authority':admin?'Operational administrator':'Academic room requester';
+  return <div className={`role-identity role-identity-${superAdmin?'super-admin':admin?'admin':'teacher'}`} aria-label={`Authenticated role: ${label}`}>
+    <span className="role-identity-icon"><Icon size={21}/></span>
+    <span className="role-identity-copy"><b>{label}</b><small>{description}</small></span>
+  </div>;
+}
+
 function parseTime(v){
   const m=String(v||'').match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
 
@@ -76,42 +98,162 @@ function parseTime(v){
   return h*60+min;
 }
 
-function localTodayISO(){
-  const d=new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-function availabilityForRoom(room,{weekly=[],reservations=[],dateISO=localTodayISO(),now=new Date(),calendarIndicators=true}={}){
-  const name=String(room?.name||room?._displayName||'').toLowerCase();
-  if(calendarIndicators && (name.includes('church') || name.includes('pool'))) return {key:'available',status:'AVAILABLE',intervals:[]};
-  const facilityStatus=String(room?.status||'AVAILABLE').toUpperCase();
-  if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(facilityStatus)) return {key:'unavailable',status:'UNAVAILABLE',intervals:[]};
-  const dayName=new Date(`${dateISO}T12:00:00`).toLocaleDateString('en-US',{weekday:'long'});
-  const toMinutes=value=>{
-    const m=String(value||'').trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i); if(!m)return NaN;
-    let h=Number(m[1]), min=Number(m[2]); if(min>59)return NaN;
-    if(m[3]){if(h<1||h>12)return NaN;if(m[3].toUpperCase()==='PM'&&h!==12)h+=12;if(m[3].toUpperCase()==='AM'&&h===12)h=0;}
-    return h*60+min;
-  };
-  const intervals=[];
-  (weekly||[]).filter(x=>Number(x.facilityId)===Number(room.id)&&x.dayOfWeek===dayName&&(!x.termStart||dateISO>=x.termStart)&&(!x.termEnd||dateISO<=x.termEnd)).forEach(x=>{const a=toMinutes(x.startTime),b=toMinutes(x.endTime);if(Number.isFinite(a)&&Number.isFinite(b)&&b>a)intervals.push([a,b,'SCHEDULED']);});
-  (reservations||[]).filter(x=>x.date===dateISO&&(x.status==='APPROVED'||x.status==='PENDING')&&((x.facilityId&&Number(x.facilityId)===Number(room.id))||(!x.facilityId&&String(x.roomName).toLowerCase()===String(room.name).toLowerCase()&&String(x.building).toLowerCase()===String(room.building).toLowerCase()))).forEach(x=>{const parts=String(x.timeSlot||'').split(/\s*(?:-|–|—|to)\s*/i);const a=toMinutes(parts[0]),b=toMinutes(parts[1]);if(Number.isFinite(a)&&Number.isFinite(b)&&b>a)intervals.push([a,b,x.status]);});
-  const nowMinutes=now.getHours()*60+now.getMinutes();
-  const active=intervals.some(([a,b,status])=>status==='APPROVED'&&dateISO===localTodayISO()&&a<=nowMinutes&&nowMinutes<b);
-  const pending=intervals.some(([, ,status])=>status==='PENDING');
-  if(active)return {key:'unavailable',status:'OCCUPIED',intervals};
-  if(pending || intervals.length)return {key:'limited',status:'LIMITED',intervals};
-  return {key:'available',status:'AVAILABLE',intervals:[]};
-}
+function localTodayISO(){ return manilaTodayISO(); }
+function availabilityForRoom(
+  room,
+  {
+    weekly = [],
+    reservations = [],
+    dateISO = localTodayISO(),
+    now = new Date(),
+    calendarIndicators = true
+  } = {}
+) {
+  const name = String(room?.name || room?._displayName || '').toLowerCase();
 
+  if (
+    calendarIndicators &&
+    (name.includes('church') || name.includes('pool'))
+  ) {
+    return { key: 'available', status: 'AVAILABLE', intervals: [] };
+  }
+
+  const facilityStatus = String(room?.status || 'AVAILABLE').toUpperCase();
+
+  if (
+    ['MAINTENANCE', 'INACTIVE', 'CLOSED', 'DISABLED', 'UNAVAILABLE']
+      .includes(facilityStatus)
+  ) {
+    return { key: 'unavailable', status: 'UNAVAILABLE', intervals: [] };
+  }
+
+  const dayName = new Date(`${dateISO}T12:00:00Z`)
+    .toLocaleDateString('en-US', {
+      weekday: 'long',
+      timeZone: 'UTC'
+    });
+
+  const toMinutes = value => {
+    const m = String(value || '')
+      .trim()
+      .match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+
+    if (!m) return NaN;
+
+    let h = Number(m[1]);
+    const min = Number(m[2]);
+
+    if (min > 59) return NaN;
+
+    const ap = m[3]?.toUpperCase();
+
+    if (ap) {
+      if (h < 1 || h > 12) return NaN;
+      if (ap === 'PM' && h !== 12) h += 12;
+      if (ap === 'AM' && h === 12) h = 0;
+    }
+
+    return h * 60 + min;
+  };
+
+  const intervals = [];
+
+  // Only schedule and reservation periods inside the permitted
+  // reservation window contribute to room availability indicators.
+  const addWithinWindow = (start, end, status) => {
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      end <= start
+    ) {
+      return;
+    }
+
+    const clippedStart = Math.max(
+      start,
+      RESERVATION_WINDOW_START_MINUTES
+    );
+
+    const clippedEnd = Math.min(
+      end,
+      RESERVATION_WINDOW_END_MINUTES
+    );
+
+    if (clippedEnd > clippedStart) {
+      intervals.push([clippedStart, clippedEnd, status]);
+    }
+  };
+
+  (weekly || [])
+    .filter(x =>
+      Number(x.facilityId) === Number(room.id) &&
+      x.dayOfWeek === dayName &&
+      (!x.termStart || dateISO >= x.termStart) &&
+      (!x.termEnd || dateISO <= x.termEnd)
+    )
+    .forEach(x => {
+      addWithinWindow(
+        toMinutes(x.startTime),
+        toMinutes(x.endTime),
+        'SCHEDULED'
+      );
+    });
+
+  (reservations || [])
+    .filter(x =>
+      x.date === dateISO &&
+      (x.status === 'APPROVED' || x.status === 'PENDING') &&
+      (
+        (x.facilityId && Number(x.facilityId) === Number(room.id)) ||
+        (
+          !x.facilityId &&
+          String(x.roomName).toLowerCase() === String(room.name).toLowerCase() &&
+          String(x.building).toLowerCase() === String(room.building).toLowerCase()
+        )
+      )
+    )
+    .forEach(x => {
+      const parts = String(x.timeSlot || '')
+        .split(/\s*(?:-|–|—|to)\s*/i);
+
+      addWithinWindow(
+        toMinutes(parts[0]),
+        toMinutes(parts[1]),
+        x.status
+      );
+    });
+
+  const nowMinutes = manilaCurrentMinutes(now);
+
+  const active = intervals.some(([a, b, status]) =>
+    status === 'APPROVED' &&
+    dateISO === localTodayISO() &&
+    a <= nowMinutes &&
+    nowMinutes < b
+  );
+
+  const pending = intervals.some(([, , status]) => status === 'PENDING');
+
+  if (active) {
+    return { key: 'unavailable', status: 'OCCUPIED', intervals };
+  }
+
+  if (pending || intervals.length) {
+    return { key: 'limited', status: 'LIMITED', intervals };
+  }
+
+  return { key: 'available', status: 'AVAILABLE', intervals: [] };
+}
 function prettyDate(v){
   if(!v) return '';
 
-  const d=new Date(`${v}T12:00:00`);
+  const d=new Date(`${v}T12:00:00Z`);
 
   return d.toLocaleDateString('en-US',{
     month:'short',
     day:'numeric',
-    year:'numeric'
+    year:'numeric',
+    timeZone:'UTC'
   });
 }
 
@@ -412,6 +554,7 @@ function MobileBottomNav({tab,setTab,user}){
         ['rooms','Available Rooms',DoorOpen],
         ['room-usage','Usage Check',ShieldCheck],
         ['user-management','Users',Users],
+        ...(isSuperAdmin(user.role) ? [['system-oversight','System',Crown]] : []),
         ['profile','Profile',UserRound]
       ]
     : [
@@ -462,6 +605,7 @@ function AdminSidebar({
     ['calendar','Room calendar',CalendarDays],
     ['room-usage','Room Usage Check',ShieldCheck],
     ['user-management','User Management',Users],
+    ...(isSuperAdmin(user.role) ? [['system-oversight','System oversight',Crown]] : []),
   ];
 
   const pendingCount=0;
@@ -472,7 +616,7 @@ function AdminSidebar({
       <div className="admin-brand-block">
         <div className="side-brand brand">
           <div className="brand-mark admin-brand-mark">
-            <ShieldCheck/>
+            {isSuperAdmin(user.role) ? <Crown/> : <ShieldCheck/>}
           </div>
           <div className="brand-copy">
             <b>ORGROOM</b>
@@ -495,8 +639,8 @@ function AdminSidebar({
           </button>
         </div>
 
-        <div className="admin-role-badge">
-          <ShieldCheck/>
+        <div className={`admin-role-badge ${isSuperAdmin(user.role) ? 'admin-role-badge-super' : ''}`}>
+          {isSuperAdmin(user.role) ? <Crown/> : <ShieldCheck/>}
           <span>{isSuperAdmin(user.role)?'Super Administrator':'Administrator'}</span>
         </div>
       </div>
@@ -541,7 +685,7 @@ function AdminSidebar({
         <div className="avatar">{initials(user.name)}</div>
         <div className="side-user">
           <b>{user.name}</b>
-          <span>Administrator · {user.org}</span>
+          <span>{displayRole(user.role)} · {user.org}</span>
         </div>
         <Settings/>
       </div>
@@ -920,9 +1064,9 @@ function NotificationCenter({notifications=[],unreadCount=0,onClose}){
 }
 
 function notificationRelativeTime(value){
-  const time=new Date(value).getTime();
-  if(!Number.isFinite(time)) return '';
-  const diff=Math.max(0,Date.now()-time);
+  const timestamp=parseApiTimestamp(value);
+  if(!timestamp) return '';
+  const diff=Math.max(0,Date.now()-timestamp.getTime());
   const minutes=Math.floor(diff/60000);
   if(minutes<1) return 'Just now';
   if(minutes<60) return `${minutes}m ago`;
@@ -930,7 +1074,7 @@ function notificationRelativeTime(value){
   if(hours<24) return `${hours}h ago`;
   const days=Math.floor(hours/24);
   if(days<7) return `${days}d ago`;
-  return new Date(value).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  return formatManilaDate(timestamp);
 }
 
 /* ============================================================
@@ -1007,7 +1151,7 @@ function Overview({
       <div className="welcome reference-welcome">
         <div>
           <span className="eyebrow">CAMPUS WORKSPACE</span>
-          <h2>{`Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}`}</h2>
+          <h2>{`Good ${manilaCurrentMinutes() < 12*60 ? 'morning' : manilaCurrentMinutes() < 18*60 ? 'afternoon' : 'evening'}`}</h2>
           <p>Here is what is happening with your room requests.</p>
         </div>
         <button className="primary-btn" onClick={() => setTab('rooms')}>
@@ -1107,7 +1251,7 @@ function AdminDashboard({
   const rejected=reservations.filter(r=>r.status==='REJECTED');
   const available=rooms.filter(r=>r.status==='AVAILABLE');
   const occupied=rooms.filter(r=>r.status!=='AVAILABLE');
-  const today=new Date().toISOString().slice(0,10);
+  const today=manilaTodayISO();
   const todayReservations=reservations.filter(r=>r.date===today);
 
   return (
@@ -1543,8 +1687,8 @@ function Rooms({
     return hour*60+minute;
   };
 
-  const currentMinute=now.getHours()*60+now.getMinutes();
-  const currentDay=now.toLocaleDateString('en-US',{weekday:'long'});
+  const currentMinute=manilaCurrentMinutes(now);
+  const currentDay=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',weekday:'long'}).format(now);
 
   const isAvailableNow=room=>{
     const facilityStatus=String(room.status||'AVAILABLE').toUpperCase();
@@ -1952,7 +2096,6 @@ function ReservationModal({
   const [error,setError]=useState('');
   const [schedule,setSchedule]=useState({weekly:[],reservations:[]});
   const [scheduleSegments,setScheduleSegments]=useState([]);
-  const [scheduleWindow,setScheduleWindow]=useState({start:7*60,end:21*60});
   const [scheduleLoading,setScheduleLoading]=useState(false);
   const [scheduleError,setScheduleError]=useState('');
   const initialForm=useMemo(()=>({
@@ -2003,38 +2146,74 @@ function ReservationModal({
   };
 
   const dateLabel=form.date
-    ? new Date(`${form.date}T12:00:00`).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+    ? new Date(`${form.date}T12:00:00Z`).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric',timeZone:'UTC'})
     : 'Select a date';
 
-  useEffect(()=>{
-    let cancelled=false;
-    if(!room?.id||!form.date)return;
-    let firstLoad=true;
-    const refreshSchedule=async()=>{
-      if(firstLoad) setScheduleLoading(true);
-      try{
-        const data=await api(`/api/room-schedule?facilityId=${encodeURIComponent(room.id)}&date=${encodeURIComponent(form.date)}`);
-        if(cancelled)return;
-        setSchedule({weekly:data.weekly||[],reservations:data.reservations||[]});
-        setScheduleSegments(Array.isArray(data.segments)?data.segments:[]);
-        setScheduleWindow({start:Number.isFinite(Number(data.operatingStart))?Number(data.operatingStart):7*60,end:Number.isFinite(Number(data.operatingEnd))?Number(data.operatingEnd):21*60});
-        setScheduleError('');
-      }catch(e){
-        if(cancelled)return;
-        setScheduleError(e.message||'Unable to refresh the room schedule.');
-        if(firstLoad){
-          setSchedule({weekly:[],reservations:[]});
-          setScheduleSegments([]);
-        }
-      }finally{
-        if(!cancelled&&firstLoad)setScheduleLoading(false);
-        firstLoad=false;
+  useEffect(() => {
+  let cancelled = false;
+
+  if (!room?.id || !form.date) return;
+
+  let firstLoad = true;
+
+  const refreshSchedule = async () => {
+    if (firstLoad) setScheduleLoading(true);
+
+    try {
+      const data = await api(
+        `/api/room-schedule?facilityId=${encodeURIComponent(room.id)}&date=${encodeURIComponent(form.date)}`
+      );
+
+      if (cancelled) return;
+
+      setSchedule({
+        weekly: data.weekly || [],
+        reservations: data.reservations || []
+      });
+
+      const serverWindowMatches =
+        Number(data.operatingStart) === RESERVATION_WINDOW_START_MINUTES &&
+        Number(data.operatingEnd) === RESERVATION_WINDOW_END_MINUTES;
+
+      setScheduleSegments(
+        Array.isArray(data.segments) ? data.segments : []
+      );
+
+      if (!serverWindowMatches) {
+        setScheduleError(RESERVATION_WINDOW_SYNC_ERROR);
+        return;
       }
-    };
-    refreshSchedule();
-    const timer=setInterval(refreshSchedule,10000);
-    return ()=>{cancelled=true;clearInterval(timer);};
-  },[room?.id,form.date]);
+
+      setScheduleError('');
+    } catch (e) {
+      if (cancelled) return;
+
+      setScheduleError(
+        e.message || 'Unable to refresh the room schedule.'
+      );
+
+      if (firstLoad) {
+        setSchedule({ weekly: [], reservations: [] });
+        setScheduleSegments([]);
+      }
+    } finally {
+      if (!cancelled && firstLoad) {
+        setScheduleLoading(false);
+      }
+
+      firstLoad = false;
+    }
+  };
+
+  refreshSchedule();
+
+  const timer = setInterval(refreshSchedule, 10000);
+
+  return () => {
+    cancelled = true;
+    clearInterval(timer);
+  };
+}, [room?.id, form.date]);
 
   const scheduleBlocks=useMemo(()=>{
     const blocks=[];
@@ -2065,31 +2244,91 @@ function ReservationModal({
     return merged;
   },[schedule]);
 
-  const operatingStart=scheduleWindow.start;
-  const operatingEnd=scheduleWindow.end;
-  const requestedStart=parseScheduleTime(form.startTime);
-  const requestedEnd=parseScheduleTime(form.endTime);
-  const requestedDuration=Number.isFinite(requestedStart)&&Number.isFinite(requestedEnd)&&requestedEnd>requestedStart ? requestedEnd-requestedStart : 0;
+  const operatingStart = RESERVATION_WINDOW_START_MINUTES;
+const operatingEnd = RESERVATION_WINDOW_END_MINUTES;
 
-  const availability=useMemo(()=>{
-    if(scheduleLoading)return {state:'LOADING',message:'Checking this room against the latest schedule…',conflict:null};
-    if(scheduleError)return {state:'UNKNOWN',message:'Schedule could not be refreshed. Final submission will still perform the server availability check.',conflict:null};
-    if(!Number.isFinite(requestedStart)||!Number.isFinite(requestedEnd)||requestedEnd<=requestedStart)
-      return {state:'INVALID',message:'Enter a valid start and end time to check availability.',conflict:null};
-    if(requestedStart<operatingStart||requestedEnd>operatingEnd)
-      return {state:'UNAVAILABLE',message:`Reservations for this calendar use the existing ${toClock(operatingStart)}–${toClock(operatingEnd)} operating window.`,conflict:{start:Math.max(operatingStart,requestedStart),end:Math.min(operatingEnd,requestedEnd)}};
-    const conflict=scheduleBlocks.find(block=>requestedStart<block.end&&block.start<requestedEnd);
-    if(conflict){
-      return {state:'UNAVAILABLE',message:`This room is ${conflict.status==='PENDING'?'pending':'occupied'} from ${toClock(conflict.start)}–${toClock(conflict.end)}.`,conflict};
-    }
-    return {state:'AVAILABLE',message:'This time is available.',conflict:null};
-  },[scheduleLoading,scheduleError,requestedStart,requestedEnd,scheduleBlocks]);
+const requestedStart = parseScheduleTime(form.startTime);
+const requestedEnd = parseScheduleTime(form.endTime);
 
+const requestedDuration =
+  Number.isFinite(requestedStart) &&
+  Number.isFinite(requestedEnd) &&
+  requestedEnd > requestedStart
+    ? requestedEnd - requestedStart
+    : 0;
+
+const availability = useMemo(() => {
+  if (
+    !Number.isFinite(requestedStart) ||
+    !Number.isFinite(requestedEnd) ||
+    requestedEnd <= requestedStart
+  ) {
+    return {
+      state: 'INVALID',
+      message: 'Enter a valid start and end time to check availability.',
+      conflict: null
+    };
+  }
+
+  if (!isWithinReservationWindow(requestedStart, requestedEnd)) {
+    return {
+      state: 'UNAVAILABLE',
+      message: RESERVATION_WINDOW_MESSAGE,
+      conflict: {
+        start: Math.max(operatingStart, requestedStart),
+        end: Math.min(operatingEnd, requestedEnd)
+      }
+    };
+  }
+
+  if (scheduleLoading) {
+    return {
+      state: 'LOADING',
+      message: 'Checking this room against the latest schedule…',
+      conflict: null
+    };
+  }
+
+  if (scheduleError) {
+    return {
+      state: 'UNKNOWN',
+      message: 'Schedule could not be refreshed. Final submission will still perform the server availability check.',
+      conflict: null
+    };
+  }
+
+  const conflict = scheduleBlocks.find(block =>
+    requestedStart < block.end &&
+    block.start < requestedEnd
+  );
+
+  if (conflict) {
+    return {
+      state: 'UNAVAILABLE',
+      message: `This room is ${conflict.status === 'PENDING' ? 'pending' : 'occupied'} from ${toClock(conflict.start)}–${toClock(conflict.end)}.`,
+      conflict
+    };
+  }
+
+  return {
+    state: 'AVAILABLE',
+    message: 'This time is available.',
+    conflict: null
+  };
+}, [
+  scheduleLoading,
+  scheduleError,
+  requestedStart,
+  requestedEnd,
+  scheduleBlocks,
+  operatingStart,
+  operatingEnd
+]);
   const recommendations=useMemo(()=>{
     if(!requestedDuration||scheduleLoading||scheduleError||!scheduleSegments.length)return [];
     const today=localTodayISO();
     const now=new Date();
-    const currentMinute=now.getHours()*60+now.getMinutes();
+    const currentMinute=manilaCurrentMinutes(now);
     return scheduleSegments
       .filter(segment=>segment.status==='AVAILABLE')
       .map(segment=>{
@@ -2108,35 +2347,128 @@ function ReservationModal({
     setError('');
   };
 
-  const submit=async e=>{
-    e.preventDefault();
-    setError('');
-    const a=parseTime(form.startTime),b=parseTime(form.endTime);
-    if(!Number.isFinite(a)||!Number.isFinite(b)||b-a<15){setError('End time must be later than start time and the reservation must be at least 15 minutes.');return;}
-    if(room.capacity!=null&&Number(room.capacity)>0&&+form.attendees>Number(room.capacity)){setError(`This room holds up to ${room.capacity} people.`);return;}
-    if(availability.state==='UNAVAILABLE'){setError(availability.message);return;}
-    setBusy(true);
-    try{
-      const created=await api('/api/reservations',{method:'POST',body:JSON.stringify({
-        userName:user.name,userEmail:user.email,userRole:user.role,orgName:form.orgName,facilityId:room.id,roomName:room.name,building:room.building,date:form.date,timeSlot:`${form.startTime} - ${form.endTime}`,attendees:+form.attendees,purpose:form.purpose,eventType:form.eventType,priority:user.role==='teacher'
-      })});
-      onCreated(created);
-    }catch(e){
-      setError(e.message);
-      try{
-        const fresh=await api(`/api/room-schedule?facilityId=${encodeURIComponent(room.id)}&date=${encodeURIComponent(form.date)}`);
-        setSchedule({weekly:fresh.weekly||[],reservations:fresh.reservations||[]});
-      }catch{}
-    }finally{setBusy(false);}
-  };
+  const submit = async e => {
+  e.preventDefault();
+  setError('');
 
-  const visualBlocks=scheduleError
-    ? [{start:operatingStart,end:operatingEnd,status:'UNKNOWN',label:'Schedule unavailable'}]
-    : scheduleSegments.length
-      ? scheduleSegments.map(segment=>({...segment}))
-      : scheduleLoading
-        ? [{start:operatingStart,end:operatingEnd,status:'UNKNOWN',label:'Checking latest schedule…'}]
-        : [{start:operatingStart,end:operatingEnd,status:'AVAILABLE',label:'Available'}];
+  const a = parseTime(form.startTime);
+  const b = parseTime(form.endTime);
+
+  if (
+    !Number.isFinite(a) ||
+    !Number.isFinite(b) ||
+    b - a < 15
+  ) {
+    setError(
+      'End time must be later than start time and the reservation must be at least 15 minutes.'
+    );
+    return;
+  }
+
+  if (!isWithinReservationWindow(a, b)) {
+    setError(RESERVATION_WINDOW_MESSAGE);
+    return;
+  }
+
+  if (scheduleError === RESERVATION_WINDOW_SYNC_ERROR) {
+    setError(RESERVATION_WINDOW_SYNC_ERROR);
+    return;
+  }
+
+  if (
+    room.capacity != null &&
+    Number(room.capacity) > 0 &&
+    Number(form.attendees) > Number(room.capacity)
+  ) {
+    setError(`This room holds up to ${room.capacity} people.`);
+    return;
+  }
+
+  if (availability.state === 'UNAVAILABLE') {
+    setError(availability.message);
+    return;
+  }
+
+  setBusy(true);
+
+  try {
+    const created = await api('/api/reservations', {
+      method: 'POST',
+      body: JSON.stringify({
+        userName: user.name,
+        userEmail: user.email,
+        userRole: user.role,
+        orgName: form.orgName,
+        facilityId: room.id,
+        roomName: room.name,
+        building: room.building,
+        date: form.date,
+        timeSlot: `${form.startTime} - ${form.endTime}`,
+        attendees: Number(form.attendees),
+        purpose: form.purpose,
+        eventType: form.eventType,
+        priority: user.role === 'teacher'
+      })
+    });
+
+    onCreated(created);
+  } catch (e) {
+    setError(e.message);
+
+    try {
+      const fresh = await api(
+        `/api/room-schedule?facilityId=${encodeURIComponent(room.id)}&date=${encodeURIComponent(form.date)}`
+      );
+
+      setSchedule({
+        weekly: fresh.weekly || [],
+        reservations: fresh.reservations || []
+      });
+    } catch {}
+  } finally {
+    setBusy(false);
+  }
+};
+  const boundedScheduleSegments = scheduleSegments
+  .map(segment => ({
+    ...segment,
+    start: Math.max(
+      operatingStart,
+      Number(segment.start)
+    ),
+    end: Math.min(
+      operatingEnd,
+      Number(segment.end)
+    )
+  }))
+  .filter(segment =>
+    Number.isFinite(segment.start) &&
+    Number.isFinite(segment.end) &&
+    segment.end > segment.start
+  );
+
+const visualBlocks = scheduleError
+  ? [{
+      start: operatingStart,
+      end: operatingEnd,
+      status: 'UNKNOWN',
+      label: 'Schedule unavailable'
+    }]
+  : boundedScheduleSegments.length
+    ? boundedScheduleSegments
+    : scheduleLoading
+      ? [{
+          start: operatingStart,
+          end: operatingEnd,
+          status: 'UNKNOWN',
+          label: 'Checking latest schedule…'
+        }]
+      : [{
+          start: operatingStart,
+          end: operatingEnd,
+          status: 'AVAILABLE',
+          label: 'Available'
+        }];
 
   return (
     <div className="modal-backdrop">
@@ -2179,7 +2511,15 @@ function ReservationModal({
 
             <div className="modal-actions span-2">
               <button type="button" className="outline-btn" onClick={handleClose}>Cancel</button>
-              <button className="primary-btn" disabled={busy||availability.state==='UNAVAILABLE'||availability.state==='LOADING'}>{busy?'Checking availability…':'Submit request'}<Send/></button>
+              <button
+  className="primary-btn"
+  disabled={
+    busy ||
+    availability.state === 'UNAVAILABLE' ||
+    availability.state === 'LOADING' ||
+    scheduleError === RESERVATION_WINDOW_SYNC_ERROR
+  }
+>{busy?'Checking availability…':'Submit request'}<Send/></button>
             </div>
           </form>
 
@@ -2220,19 +2560,21 @@ function Calendar({
   onClearInstructorSearch
 }){
 
-  const today=new Date();
+  const todayISO=manilaTodayISO();
+  const [todayYear,todayMonth,todayDay]=todayISO.split('-').map(Number);
+  const today=new Date(Date.UTC(todayYear,todayMonth-1,todayDay,12));
 
   const toLocalISO=(value)=>{
     const d=value instanceof Date ? value : new Date(value);
-    const y=d.getFullYear();
-    const m=String(d.getMonth()+1).padStart(2,'0');
-    const day=String(d.getDate()).padStart(2,'0');
+    const y=d.getUTCFullYear();
+    const m=String(d.getUTCMonth()+1).padStart(2,'0');
+    const day=String(d.getUTCDate()).padStart(2,'0');
     return `${y}-${m}-${day}`;
   };
 
   const [selectedDate,setSelectedDate]=useState(today);
   const [viewMonth,setViewMonth]=useState(
-    new Date(today.getFullYear(),today.getMonth(),1)
+    new Date(Date.UTC(todayYear,todayMonth-1,1,12))
   );
   const [expandedBuilding,setExpandedBuilding]=useState(null);
 
@@ -2244,8 +2586,8 @@ function Calendar({
   const grouped=groupRoomsByBuilding(validRooms);
 
   const schedulesForDate=(dateISO)=>{
-    const date=new Date(`${dateISO}T12:00:00`);
-    const dayName=date.toLocaleDateString('en-US',{weekday:'long'});
+    const date=new Date(`${dateISO}T12:00:00Z`);
+    const dayName=date.toLocaleDateString('en-US',{weekday:'long',timeZone:'UTC'});
 
     return weekly.filter(
       schedule=>{
@@ -2323,8 +2665,8 @@ function Calendar({
     const result=availabilityForRoom(room,{weekly,reservations,dateISO,calendarIndicators:true});
     const merged=mergeIntervals(result.intervals.map(([start,end])=>[start,end]));
     if(result.status==='UNAVAILABLE') return {key:'unavailable',label:'Not Available',className:'calendar-availability-unavailable',intervals:merged};
-    const operatingStart=7*60;
-    const operatingEnd=21*60;
+    const operatingStart = RESERVATION_WINDOW_START_MINUTES;
+const operatingEnd = RESERVATION_WINDOW_END_MINUTES;
     const covered=merged.reduce((sum,[start,end])=>sum+Math.max(0,Math.min(end,operatingEnd)-Math.max(start,operatingStart)),0);
     if(covered>=operatingEnd-operatingStart) return {key:'unavailable',label:'Not Available',className:'calendar-availability-unavailable',intervals:merged};
     if(merged.length) return {key:'limited',label:'Limited Availability',className:'calendar-availability-limited',intervals:merged};
@@ -2361,15 +2703,13 @@ function Calendar({
 
   const monthLabel=viewMonth.toLocaleDateString(
     'en-US',
-    {month:'long',year:'numeric'}
+    {month:'long',year:'numeric',timeZone:'UTC'}
   );
 
-  const firstDay=viewMonth.getDay();
+  const firstDay=new Date(Date.UTC(viewMonth.getUTCFullYear(),viewMonth.getUTCMonth(),1)).getUTCDay();
   const daysInMonth=new Date(
-    viewMonth.getFullYear(),
-    viewMonth.getMonth()+1,
-    0
-  ).getDate();
+    Date.UTC(viewMonth.getUTCFullYear(),viewMonth.getUTCMonth()+1,0)
+  ).getUTCDate();
 
   const calendarCells=[];
   const totalCalendarCells=Math.ceil((firstDay+daysInMonth)/7)*7;
@@ -2382,11 +2722,12 @@ function Calendar({
       continue;
     }
 
-    const cellDate=new Date(
-      viewMonth.getFullYear(),
-      viewMonth.getMonth(),
-      dayNumber
-    );
+    const cellDate=new Date(Date.UTC(
+      viewMonth.getUTCFullYear(),
+      viewMonth.getUTCMonth(),
+      dayNumber,
+      12
+    ));
 
     const cellISO=toLocalISO(cellDate);
     const isToday=cellISO===toLocalISO(today);
@@ -2407,11 +2748,12 @@ function Calendar({
   };
 
   const changeMonth=(offset)=>{
-    const nextMonth=new Date(
-      viewMonth.getFullYear(),
-      viewMonth.getMonth()+offset,
-      1
-    );
+    const nextMonth=new Date(Date.UTC(
+      viewMonth.getUTCFullYear(),
+      viewMonth.getUTCMonth()+offset,
+      1,
+      12
+    ));
 
     setViewMonth(nextMonth);
     setSelectedDate(nextMonth);
@@ -2477,7 +2819,7 @@ function Calendar({
             <button
               className="today-btn"
               onClick={()=>{
-                setViewMonth(new Date(today.getFullYear(),today.getMonth(),1));
+                setViewMonth(new Date(Date.UTC(todayYear,todayMonth-1,1,12)));
                 setSelectedDate(today);
               }}
             >
@@ -2543,7 +2885,7 @@ function Calendar({
       <div className="selected-date-banner">
         <div>
           <span className="eyebrow">SELECTED DATE</span>
-          <strong>{selectedDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</strong>
+          <strong>{selectedDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric',timeZone:'UTC'})}</strong>
         </div>
         <div className="selected-date-stats">
           <span><b>{availabilityCounts.available}</b> available</span>
@@ -2575,7 +2917,7 @@ function Calendar({
       <div className="calendar-facilities-heading">
         <div>
           <span className="eyebrow">AVAILABLE FACILITIES</span>
-          <h3>Buildings and room availability on {selectedDate.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</h3>
+          <h3>Buildings and room availability on {selectedDate.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric',timeZone:'UTC'})}</h3>
         </div>
       </div>
 
@@ -2763,20 +3105,13 @@ function Reservations({
   const rejected=userReservations.filter(r=>r.status==='REJECTED');
   const cancelled=userReservations.filter(r=>r.status==='CANCELLED');
 
-  const today=new Date();
-  today.setHours(0,0,0,0);
+  const today=manilaTodayISO();
   const upcoming=approved
-    .filter(r=>{
-      const d=new Date(`${r.date}T23:59:59`);
-      return !Number.isNaN(d.getTime()) && d>=today;
-    })
+    .filter(r=>String(r.date)>=today)
     .sort((a,b)=>`${a.date} ${a.timeSlot}`.localeCompare(`${b.date} ${b.timeSlot}`));
 
   const history=userReservations
-    .filter(r=>{
-      const d=new Date(`${r.date}T23:59:59`);
-      return !Number.isNaN(d.getTime()) && d<today;
-    })
+    .filter(r=>String(r.date)<today)
     .sort((a,b)=>`${b.date} ${b.timeSlot}`.localeCompare(`${a.date} ${a.timeSlot}`));
 
   if(selected){
@@ -3060,14 +3395,14 @@ function ReservationDetail({
 
         <div>
           <span>Submitted</span>
-          <b>{String(r.submittedAt).slice(0,16)}</b>
+          <b>{formatManilaDateTime(r.submittedAt)}</b>
         </div>
 
         {r.decisionByName && r.status!=='PENDING' && (
           <div>
             <span>{r.status==='APPROVED' ? 'Approved by' : 'Reviewed by'}</span>
             <b>{r.decisionByName}</b>
-            {r.decisionAt && <small>{String(r.decisionAt).slice(0,16)}</small>}
+            {r.decisionAt && <small>{formatManilaDateTime(r.decisionAt)}</small>}
           </div>
         )}
 
@@ -3144,6 +3479,8 @@ function Requests({
   user,
   onDecision,
   onEdit,
+  onOverride,
+  onHistory,
   focusId=null
 }){
 
@@ -3214,6 +3551,10 @@ function Requests({
 
         {list.map(r=>{
           const isOwnRequest=Number(r.userId)===Number(user?.id) || (!r.userId && String(r.userEmail||'').toLowerCase()===String(user?.email||'').toLowerCase());
+          const requesterRole=String(r.userRole||'teacher').toUpperCase();
+          const superAdmin=isSuperAdmin(user?.role);
+          const canReview=!isOwnRequest && (superAdmin ? requesterRole!=='SUPER_ADMIN' : requesterRole==='TEACHER');
+          const canEdit=superAdmin || requesterRole==='TEACHER' || isOwnRequest;
           return (
           <div
             className={`request-card ${isOwnRequest?'request-card-self':''} ${focusId && (String(focusId)===String(r.id)||String(focusId)===String(r.dbId))?'request-card-focused':''}`}
@@ -3252,9 +3593,12 @@ function Requests({
                   <b>Purpose:</b> {r.purpose}
                 </small>
 
-                {r.decisionByName && r.status!=='PENDING' && (
+                {r.status!=='PENDING' && r.decisionSource==='SYSTEM_AUTO_APPROVAL' && (
+                  <small className="request-decision-line"><b>Approval source:</b> ORGROOM System · Automatic approval{r.decisionAt ? ` · ${formatManilaDateTime(r.decisionAt)}` : ''}</small>
+                )}
+                {r.decisionByName && r.status!=='PENDING' && r.decisionSource!=='SYSTEM_AUTO_APPROVAL' && (
                   <small className="request-decision-line">
-                    <b>{r.status==='APPROVED'?'Approved by':'Reviewed by'}:</b> {r.decisionByName}{r.decisionAt ? ` · ${String(r.decisionAt).slice(0,16)}` : ''}
+                    <b>{r.status==='APPROVED'?'Approved by':'Reviewed by'}:</b> {r.decisionByName}{r.decisionAt ? ` · ${formatManilaDateTime(r.decisionAt)}` : ''}
                   </small>
                 )}
 
@@ -3264,40 +3608,17 @@ function Requests({
 
 
             <div className="request-actions">
-
-              {r.status==='PENDING' && (
-                isOwnRequest ? (
-                  <span className="request-self-note">You submitted this request</span>
-                ) : (
-                  <>
-                    <button
-                      className="approve-btn"
-                      onClick={()=>onDecision(r,'APPROVED')}
-                    >
-                      <Check/>
-                      Approve
-                    </button>
-
-                    <button
-                      className="reject-btn"
-                      onClick={()=>onDecision(r,'REJECTED')}
-                    >
-                      <X/>
-                      Reject
-                    </button>
-                  </>
-                )
-              )}
-
-
-              <button
-                className="icon-btn"
-                onClick={()=>onEdit(r)}
-                title="Review or edit request details"
-              >
-                <Pencil/>
-              </button>
-
+              {r.status==='PENDING' && isOwnRequest && <span className="request-self-note">You submitted this request</span>}
+              {r.status==='PENDING' && !canReview && !isOwnRequest && requesterRole==='ADMIN' && !superAdmin && <span className="request-self-note">Awaiting Super Admin review</span>}
+              {r.status==='PENDING' && canReview && <>
+                <button className="approve-btn" onClick={()=>onDecision(r,'APPROVED')}><Check/>Approve</button>
+                <button className="reject-btn" onClick={()=>onDecision(r,'REJECTED')}><X/>Reject</button>
+              </>}
+              {superAdmin && <>
+                <button className="outline-btn sa-request-action" onClick={()=>onHistory(r)} title="View complete decision history">History</button>
+                <button className="outline-btn sa-request-action" onClick={()=>onOverride(r)} title="Override this reservation decision">Override</button>
+              </>}
+              {canEdit && <button className="icon-btn" onClick={()=>onEdit(r)} title="Review or edit request details"><Pencil/></button>}
             </div>
 
           </div>
@@ -3377,7 +3698,7 @@ function Profile({
             {user.email}
           </p>
 
-          <Status value={user.role.toUpperCase()}/>
+          <RoleIdentity role={user.role}/>
 
         </div>
 
@@ -3421,7 +3742,7 @@ function Profile({
 
             <div>
               <span>Role</span>
-              <b>{user.role}</b>
+              <b>{displayRole(user.role)}</b>
             </div>
 
             <div>
@@ -3687,10 +4008,7 @@ function Empty({
    ============================================================ */
 
 function RoomUsageCheck({user,requestConfirmation}){
-  const [date,setDate]=useState(()=>{
-    const d=new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  });
+  const [date,setDate]=useState(()=>manilaTodayISO());
   const [records,setRecords]=useState([]);
   const [building,setBuilding]=useState('ALL');
   const [filter,setFilter]=useState('ALL');
@@ -3721,7 +4039,7 @@ function RoomUsageCheck({user,requestConfirmation}){
     return ()=>clearInterval(timer);
   },[]);
 
-  const dateLabel=new Date(`${date}T12:00:00`).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  const dateLabel=new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric',timeZone:'UTC'});
 
   const timeParts=(slot)=>{
     const parts=String(slot||'').split(/\s*(?:-|–|—|to)\s*/i);
@@ -3730,13 +4048,11 @@ function RoomUsageCheck({user,requestConfirmation}){
 
   const stateFor=(r)=>{
     const [start,end]=timeParts(r.reservation.timeSlot);
-    const now=new Date();
-    const selected=new Date(`${r.reservation.date}T00:00:00`);
-    const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
-    const diff=Math.round((selected-today)/86400000);
+    const today=manilaTodayISO();
+    const diff=String(r.reservation.date).localeCompare(today);
     if(diff>0) return 'UPCOMING';
     if(diff<0) return 'COMPLETED';
-    const mins=now.getHours()*60+now.getMinutes();
+    const mins=manilaCurrentMinutes();
     if(Number.isFinite(start)&&Number.isFinite(end)){
       if(mins<start) return 'UPCOMING';
       if(mins>=start&&mins<end) return 'NOW';
@@ -3769,9 +4085,9 @@ function RoomUsageCheck({user,requestConfirmation}){
   },{});
 
   const moveDay=(delta)=>{
-    const d=new Date(`${date}T12:00:00`);
-    d.setDate(d.getDate()+delta);
-    setDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    const d=new Date(`${date}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate()+delta);
+    setDate(`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`);
   };
 
   const saveStatus=async(record,status)=>{
@@ -3831,7 +4147,7 @@ function RoomUsageCheck({user,requestConfirmation}){
       <section className="room-usage-datebar panel">
         <button className="icon-btn" onClick={()=>moveDay(-1)} aria-label="Previous day"><ChevronLeft/></button>
         <button className="usage-today-btn" onClick={()=>{
-          const d=new Date(); setDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+          setDate(manilaTodayISO());
         }}>Today</button>
         <label className="usage-date-input"><CalendarDays/><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>
         <div className="usage-date-label"><b>{dateLabel}</b><span>Approved reservations scheduled for this date</span></div>
@@ -3887,7 +4203,7 @@ function RoomUsageCheck({user,requestConfirmation}){
                       </div>
                       <div className="usage-card-check">
                         <span className={`usage-status-badge ${statusClass(record.usage.status)}`}>{record.usage.status==='CHECKED_IN'?<CheckCircle2/>:record.usage.status==='NOT_USED'?<XCircle/>:<Clock3/>}{usageLabel(record.usage.status)}</span>
-                        {record.usage.checkedAt && <small>Checked at {new Date(record.usage.checkedAt.replace(' ','T')).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</small>}
+                        {record.usage.checkedAt && <small>Checked at {formatManilaTime(record.usage.checkedAt)}</small>}
                         {record.usage.checkedBy && <small>by {record.usage.checkedBy}</small>}
                         {record.usage.note && <p>{record.usage.note}</p>}
                         <div className="usage-actions">
@@ -4037,7 +4353,7 @@ function UserManagement({initialSearch='',currentUser}){
                   <td><span className={`role-pill ${targetRole.toLowerCase()}`}>{targetRole==='SUPER_ADMIN'?'Super Admin':targetRole==='ADMIN'?'Admin':'Teacher'}</span></td>
                   <td><span className={`status ${u.isActive?'approved':'rejected'}`}><i/>{u.isActive?'Active':'Deactivated'}</span></td>
                   <td><span className={`status ${u.isVerified?'approved':'pending'}`}><i/>{u.isVerified?'Verified':'Pending verification'}</span></td>
-                  <td>{u.createdAt?new Date(String(u.createdAt).replace(' ','T')).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+                  <td>{u.createdAt?formatManilaDate(u.createdAt):'—'}</td>
                   <td><div className="user-account-actions">
                     {manageable&&<button disabled={updatingId===u.id} onClick={()=>beginEditUser(u)}>Edit</button>}
                     {manageable&&actorIsSuperAdmin&&<select aria-label={`Change role for ${u.name}`} value={targetRole} disabled={updatingId===u.id} onChange={e=>updateUser(u,{role:e.target.value})}><option value="TEACHER">Teacher</option><option value="ADMIN">Admin</option></select>}
@@ -4153,6 +4469,7 @@ export default function App(){
   const [chatOpen,setChatOpen]=useState(false);
   const [chatConversationId,setChatConversationId]=useState(null);
   const [focusReservationId,setFocusReservationId]=useState(null);
+  const [decisionHistory,setDecisionHistory]=useState(null);
   const [searchPageQuery,setSearchPageQuery]=useState('');
   const [searchFocusRoomId,setSearchFocusRoomId]=useState(null);
   const [searchFocusRoomKey,setSearchFocusRoomKey]=useState(0);
@@ -4165,7 +4482,7 @@ export default function App(){
     if(!user) return;
 
     const allowedTabs=hasAdminAccess(user.role)
-      ? new Set(['home','calendar','rooms','reservations','requests','room-usage','user-management','profile','search-results'])
+      ? new Set(['home','calendar','rooms','reservations','requests','room-usage','user-management','profile','search-results', ...(isSuperAdmin(user.role) ? ['system-oversight'] : [])])
       : new Set(['home','calendar','rooms','reservations','profile','search-results']);
 
     const normalizeTab=value=>allowedTabs.has(value) ? value : 'home';
@@ -4344,37 +4661,48 @@ export default function App(){
   },[user,authChecked,startupAttempt]);
 
 
-  const saveEdit=async(form)=>{
+  const saveEdit = async form => {
+  const parts = String(form.timeSlot || '').split(/\s*-\s*/);
 
-    try{
+  const start = parseTime(parts[0]);
+  const end = parseTime(parts[1]);
 
-      const updated=await api(
-        `/api/reservations/${form.id}`,
-        {
-          method:'PUT',
-          body:JSON.stringify(form)
-        }
-      );
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end <= start
+  ) {
+    alert('Please provide a valid reservation time.');
+    return;
+  }
 
-      setReservations(
-        x=>
-          x.map(
-            r=>
-              r.id===updated.id
-                ? updated
-                : r
-          )
-      );
+  if (!isWithinReservationWindow(start, end)) {
+    alert(RESERVATION_WINDOW_MESSAGE);
+    return;
+  }
 
-      setEditing(null);
+  try {
+    const updated = await api(
+      `/api/reservations/${form.id}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(form)
+      }
+    );
 
-    }catch(e){
+    setReservations(x =>
+      x.map(r =>
+        r.id === updated.id
+          ? updated
+          : r
+      )
+    );
 
-      alert(e.message);
-
-    }
-  };
-
+    setEditing(null);
+  } catch (e) {
+    alert(e.message);
+  }
+};
 
   const remove=async(id)=>{
     const isAdmin=hasAdminAccess(user?.role);
@@ -4411,6 +4739,32 @@ export default function App(){
         setReservations(x=>x.map(a=>a.id===u.id?u:a));
       }
     });
+  };
+
+  const overrideReservation = async reservation => {
+    const nextStatus = String(window.prompt('Enter the new reservation status: PENDING, APPROVED, REJECTED, or CANCELLED', reservation.status) || '').trim().toUpperCase();
+    if (!['PENDING','APPROVED','REJECTED','CANCELLED'].includes(nextStatus) || nextStatus === reservation.status) return;
+    const reason = String(window.prompt('Required reason for this Super Admin override (at least 5 characters):') || '').trim();
+    if (reason.length < 5) { window.alert('A reason of at least five characters is required.'); return; }
+    await requestConfirmation({
+      title: 'Confirm Super Admin override?',
+      description: `Change reservation ${reservation.id} from ${reservation.status} to ${nextStatus}. This decision will be recorded in the audit and reservation history and the requester will be notified.`,
+      confirmLabel: 'CONFIRM OVERRIDE', severity: 'danger',
+      action: async () => {
+        const updated = await api(`/api/super-admin/reservations/${reservation.dbId}/override`, {
+          method: 'POST', body: JSON.stringify({ status: nextStatus, reason })
+        });
+        setReservations(items => items.map(item => item.dbId === updated.dbId ? updated : item));
+        await loadNotifications();
+      }
+    });
+  };
+
+  const viewReservationHistory = async reservation => {
+    try {
+      const rows = await api(`/api/super-admin/reservations/${reservation.dbId}/history`);
+      setDecisionHistory({ reservation, rows: rows || [] });
+    } catch (e) { window.alert(e.message || 'Unable to load reservation history.'); }
   };
 
   const handleNotificationClose=(notification)=>{
@@ -4554,6 +4908,11 @@ export default function App(){
       'Create and review Teacher and Admin accounts.'
     ],
 
+    'system-oversight':[
+      'System oversight',
+      'Global configuration, facility authority, reports, and audit history.'
+    ],
+
     profile:[
       'Profile',
       'Account details and access settings.'
@@ -4642,6 +5001,8 @@ export default function App(){
         user={user}
         onDecision={decision}
         onEdit={setEditing}
+        onOverride={overrideReservation}
+        onHistory={viewReservationHistory}
         focusId={focusReservationId}
       />
     );
@@ -4653,6 +5014,9 @@ export default function App(){
 
   if(tab==='user-management' && hasAdminAccess(user.role))
     content=(<UserManagement initialSearch={userSearchQuery} currentUser={user}/>);
+
+  if(tab==='system-oversight' && isSuperAdmin(user.role))
+    content=(<SuperAdminConsole api={api}/>);
 
   if(tab==='search-results')
     content=(<SearchResultsPage query={searchPageQuery} user={user} onSelect={handleGlobalSearchSelect}/>);
@@ -4773,6 +5137,15 @@ export default function App(){
           requestConfirmation={requestConfirmation}
           onSave={saveEdit}
         />
+      )}
+
+      {decisionHistory && isSuperAdmin(user.role) && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={event=>{if(event.target===event.currentTarget)setDecisionHistory(null);}}>
+          <section className="modal sa-history-modal" role="dialog" aria-modal="true" aria-labelledby="sa-history-title">
+            <div className="modal-head"><div><span className="eyebrow">SUPER ADMIN RECORD</span><h3 id="sa-history-title">Decision history · {decisionHistory.reservation.id}</h3><p>{decisionHistory.reservation.roomName} · {decisionHistory.reservation.date} · {decisionHistory.reservation.timeSlot}</p></div><button className="icon-btn" onClick={()=>setDecisionHistory(null)} aria-label="Close history"><X/></button></div>
+            <div className="sa-history-list">{decisionHistory.rows.map(row=><article key={row.id}><div><b>{row.fromStatus || 'CREATED'} → {row.toStatus}</b><span>{row.actionType.replaceAll('_',' ')}</span></div><p>{row.actorName} · {row.actorRole}</p>{row.reason && <small>{row.reason}</small>}<time>{formatManilaDateTime(row.createdAt)}</time></article>)}{!decisionHistory.rows.length && <p>No decision history has been recorded for this reservation yet.</p>}</div>
+          </section>
+        </div>
       )}
 
       <ReservationReminderCenter reservations={reservations} user={user}/>

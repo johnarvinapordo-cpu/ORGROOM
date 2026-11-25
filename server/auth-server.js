@@ -5,10 +5,76 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { dbQuery, dbTransaction, ensureDatabase, pool } from './db.js';
 import { MAX_ACCOUNT_CAPACITY, ACCOUNT_CAPACITY_LOCK_NAME } from './account-config.js';
+import {
+  RESERVATION_WINDOW_START_MINUTES as DEFAULT_RESERVATION_START_MINUTES,
+  RESERVATION_WINDOW_END_MINUTES as DEFAULT_RESERVATION_END_MINUTES,
+  formatReservationWindowMessage,
+  isWithinReservationWindow
+} from '../shared/reservation-window.js';
 
 
 
 const app = express();
+
+const ORGROOM_TIME_ZONE = 'Asia/Manila';
+
+// DATETIME columns in ORGROOM represent UTC wall-clock values. Add an explicit
+// Z marker in API payloads so clients never parse them as browser-local times.
+function toUtcIso(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  let text = String(value).trim();
+  if (!text) return null;
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(text)) text = `${text.replace(' ', 'T')}Z`;
+  const date = new Date(text);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function manilaDateTimeParts(value = new Date()) {
+  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: ORGROOM_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    weekday: 'long', hourCycle: 'h23'
+  }).formatToParts(value).map(part => [part.type, part.value]));
+}
+
+function manilaTodayISO() {
+  const p = manilaDateTimeParts();
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function manilaCurrentMinutes() {
+  const p = manilaDateTimeParts();
+  return Number(p.hour) * 60 + Number(p.minute);
+}
+
+// Reservation date/time strings are campus wall-clock values, not UTC. Convert
+// them to instants with the IANA zone without changing the saved date or slot.
+function manilaWallTimeToEpochMs(dateValue, timeValue) {
+  const match = String(dateValue || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const minutes = parseTime(timeValue);
+  if (!match || !Number.isFinite(minutes)) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const hour = Math.floor(minutes / 60), minute = minutes % 60;
+  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const check = new Date(wallAsUtc);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() + 1 !== month || check.getUTCDate() !== day) return null;
+  const localized = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: ORGROOM_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  }).formatToParts(check).map(part => [part.type, part.value]));
+  const localizedAsUtc = Date.UTC(Number(localized.year), Number(localized.month) - 1, Number(localized.day), Number(localized.hour), Number(localized.minute), Number(localized.second));
+  return wallAsUtc - (localizedAsUtc - wallAsUtc);
+}
+
+function reservationTimeRange(dateValue, timeSlot) {
+  const parts = String(timeSlot || '').split(/\s*-\s*/);
+  if (parts.length < 2) return [null, null];
+  return [manilaWallTimeToEpochMs(dateValue, parts[0]), manilaWallTimeToEpochMs(dateValue, parts[1])];
+}
+
 const configuredOrigins = String(process.env.CLIENT_ORIGIN || '').split(',').map(x=>x.trim()).filter(Boolean);
 const isLocalNetworkOrigin = origin => {
   try{
@@ -27,8 +93,6 @@ const CODE_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 30 * 1000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const CODE_MAX_ATTEMPTS = 5;
-const OPERATING_START_MINUTES = 7 * 60;
-const OPERATING_END_MINUTES = 21 * 60;
 const SESSION_COOKIELESS_HEADER = 'authorization';
 let reminderJobRunning=false;
 const emailGatewayUrl = String(
@@ -44,6 +108,100 @@ const normalizeRole = role => String(role || '').trim().toUpperCase();
 const isAdminRole = role => ['ADMIN', 'SUPER_ADMIN'].includes(normalizeRole(role));
 const isSuperAdminRole = role => normalizeRole(role) === 'SUPER_ADMIN';
 const strongPassword = password => typeof password === 'string' && password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
+
+let runtimeSystemSettings = {
+  maxAccounts: MAX_ACCOUNT_CAPACITY,
+  reservationStartMinutes: DEFAULT_RESERVATION_START_MINUTES,
+  reservationEndMinutes: DEFAULT_RESERVATION_END_MINUTES
+};
+
+async function refreshRuntimeSystemSettings() {
+  const rows = await dbQuery(
+    `SELECT setting_key, setting_value FROM orgroom_system_settings
+     WHERE setting_key IN ('max_accounts','reservation_start_minutes','reservation_end_minutes')`
+  );
+  const stored = Object.fromEntries(rows.map(row => [row.setting_key, Number(row.setting_value)]));
+  const maxAccounts = Number.isInteger(stored.max_accounts) && stored.max_accounts >= 1
+    ? stored.max_accounts : MAX_ACCOUNT_CAPACITY;
+  let start = Number.isInteger(stored.reservation_start_minutes)
+    ? stored.reservation_start_minutes : DEFAULT_RESERVATION_START_MINUTES;
+  let end = Number.isInteger(stored.reservation_end_minutes)
+    ? stored.reservation_end_minutes : DEFAULT_RESERVATION_END_MINUTES;
+  if (start < 0 || end > 1439 || start >= end) {
+    start = DEFAULT_RESERVATION_START_MINUTES;
+    end = DEFAULT_RESERVATION_END_MINUTES;
+  }
+  runtimeSystemSettings = {
+    maxAccounts,
+    reservationStartMinutes: start,
+    reservationEndMinutes: end
+  };
+  return runtimeSystemSettings;
+}
+
+function withinCurrentReservationWindow(startMinutes, endMinutes) {
+  return isWithinReservationWindow(
+    startMinutes,
+    endMinutes,
+    runtimeSystemSettings.reservationStartMinutes,
+    runtimeSystemSettings.reservationEndMinutes
+  );
+}
+
+function currentReservationWindowMessage() {
+  return formatReservationWindowMessage(
+    runtimeSystemSettings.reservationStartMinutes,
+    runtimeSystemSettings.reservationEndMinutes
+  );
+}
+
+function safeJson(value) {
+  if (value == null) return null;
+  try { return JSON.stringify(value); } catch { return JSON.stringify({ unavailable: true }); }
+}
+
+async function writeAuditEvent({ actor = null, action, entityType, entityId = '', previousValues = null, newValues = null, reason = '' }, query = dbQuery) {
+  await query(
+    `INSERT INTO orgroom_audit_logs
+      (actor_user_id,actor_name,actor_email,actor_role,action,entity_type,entity_id,previous_values,new_values,reason)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [
+      actor?.id ? Number(actor.id) : null,
+      String(actor?.name || 'System').slice(0,255),
+      normalizeEmail(actor?.email || ''),
+      normalizeRole(actor?.role || 'SYSTEM'),
+      String(action || 'SYSTEM_EVENT').slice(0,100),
+      String(entityType || 'SYSTEM').slice(0,60),
+      String(entityId ?? '').slice(0,100),
+      safeJson(previousValues),
+      safeJson(newValues),
+      String(reason || '').slice(0,2000)
+    ]
+  );
+}
+
+async function writeReservationDecisionHistory({ reservationId, fromStatus = null, toStatus, actionType, actor = null, actorRole = null, reason = '' }, query = dbQuery) {
+  await query(
+    `INSERT INTO reservation_decision_history
+      (reservation_id,from_status,to_status,action_type,actor_user_id,actor_name,actor_role,reason)
+     VALUES (?,?,?,?,?,?,?,?)`,
+    [
+      Number(reservationId),
+      fromStatus,
+      String(toStatus),
+      String(actionType),
+      actor?.id ? Number(actor.id) : null,
+      String(actor?.name || (actorRole === 'SYSTEM' ? 'ORGROOM System' : 'System')).slice(0,255),
+      normalizeRole(actorRole || actor?.role || 'SYSTEM'),
+      String(reason || '').slice(0,2000)
+    ]
+  );
+}
+
+function parseJsonColumn(value) {
+  if (!value) return null;
+  try { return JSON.parse(value); } catch { return null; }
+}
 async function verifyPassword(password, storedHash){
   const hash=String(storedHash||'');
   if(hash.startsWith('$2a$')||hash.startsWith('$2b$')||hash.startsWith('$2y$')) return bcrypt.compare(String(password||''),hash);
@@ -230,6 +388,7 @@ function reservationNotificationDetails(row){
     decisionBy: row.decision_by_name || '',
     decisionAt: row.decision_at ? String(row.decision_at) : '',
     adminNotes: row.admin_notes || '',
+    decisionSource: row.decision_source || 'MANUAL',
     updatedAt: row.updated_at ? String(row.updated_at) : ''
   };
 }
@@ -254,13 +413,15 @@ async function sendNotificationEmail(notificationId, recipientEmail, type, detai
     const isRejected=type==='RESERVATION_REJECTED';
     const isCancelled=type==='RESERVATION_CANCELLED';
     const isModified=type==='RESERVATION_MODIFIED';
-    const subject=isNew?'ORGROOM — New Reservation Request':isApproved?'ORGROOM — Reservation Approved':isRejected?'ORGROOM — Reservation Rejected':isCancelled?'ORGROOM — Reservation Cancelled':'ORGROOM — Reservation Update';
-    const intro=isNew?'A new reservation request has been submitted in ORGROOM.':isApproved?'Your reservation request has been approved.':isRejected?'Your reservation request has been rejected.':isCancelled?'A reservation request has been cancelled.':isModified?'A reservation request has been modified.':'Your ORGROOM reservation has been updated.';
+    const isOverridden=type==='RESERVATION_OVERRIDDEN';
+    const automaticApproval=isApproved && d.decisionSource==='SYSTEM_AUTO_APPROVAL';
+    const subject=isNew?'ORGROOM — New Reservation Request':isApproved?'ORGROOM — Reservation Approved':isRejected?'ORGROOM — Reservation Rejected':isCancelled?'ORGROOM — Reservation Cancelled':isOverridden?'ORGROOM — Reservation Decision Updated':'ORGROOM — Reservation Update';
+    const intro=isNew?'A new reservation request has been submitted in ORGROOM.':automaticApproval?'Your reservation was automatically approved by the ORGROOM system after availability validation.':isApproved?'Your reservation request has been approved.':isRejected?'Your reservation request has been rejected.':isCancelled?'A reservation request has been cancelled.':isModified?'A reservation request has been modified.':isOverridden?'A Super Admin changed the reservation decision.':'Your ORGROOM reservation has been updated.';
     const statusLabel=d.status==='APPROVED'?'Approved':d.status==='REJECTED'?'Rejected':d.status==='CANCELLED'?'Cancelled':'Pending';
-    const reviewer=d.decisionBy ? `<p style="margin:12px 0"><strong>${isApproved?'Approved by':'Reviewed by'}:</strong> ${escapeHtml(d.decisionBy)}</p>` : '';
-    const reason=(isRejected && d.adminNotes) ? `<p style="margin:12px 0"><strong>Reason:</strong> ${escapeHtml(d.adminNotes)}</p>` : '';
-    const action=isNew||isApproved||isRejected||isModified ? `<p style="margin:24px 0"><a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 18px;background:#315bea;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">${isNew?'Review Reservation Request':'Open ORGROOM'}</a></p>` : '';
-    const text=`Hello ${d.recipientName || 'ORGROOM user'},\n\n${intro}\n\nRequester: ${d.requesterName}\nRequester email: ${d.requesterEmail}\nBuilding: ${d.building}\nRoom: ${d.room}\nDate: ${d.date}\nTime: ${d.time}\nPurpose: ${d.purpose}\nStatus: ${statusLabel}${d.adminNotes&&isRejected?`\nReason: ${d.adminNotes}`:''}${d.decisionBy?`\n${isApproved?'Approved by':'Reviewed by'}: ${d.decisionBy}`:''}\n\nPlease log in to ORGROOM for more details.\n\nORGROOM\nFacility Reservation Platform`;
+    const reviewer=automaticApproval ? '<p style="margin:12px 0"><strong>Approval source:</strong> ORGROOM System (automatic approval)</p>' : d.decisionBy ? `<p style="margin:12px 0"><strong>${isApproved?'Approved by':'Reviewed by'}:</strong> ${escapeHtml(d.decisionBy)}</p>` : '';
+    const reason=((isRejected || isOverridden) && d.adminNotes) ? `<p style="margin:12px 0"><strong>Reason:</strong> ${escapeHtml(d.adminNotes)}</p>` : '';
+    const action=isNew||isApproved||isRejected||isModified||isOverridden ? `<p style="margin:24px 0"><a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 18px;background:#315bea;color:#fff;text-decoration:none;border-radius:10px;font-weight:700">${isNew?'Review Reservation Request':'Open ORGROOM'}</a></p>` : '';
+    const text=`Hello ${d.recipientName || 'ORGROOM user'},\n\n${intro}\n\nRequester: ${d.requesterName}\nRequester email: ${d.requesterEmail}\nBuilding: ${d.building}\nRoom: ${d.room}\nDate: ${d.date}\nTime: ${d.time}\nPurpose: ${d.purpose}\nStatus: ${statusLabel}${d.adminNotes&&(isRejected||isOverridden)?`\nReason: ${d.adminNotes}`:''}${automaticApproval?'\nApproval source: ORGROOM System (automatic approval)':d.decisionBy?`\n${isApproved?'Approved by':'Reviewed by'}: ${d.decisionBy}`:''}\n\nPlease log in to ORGROOM for more details.\n\nORGROOM\nFacility Reservation Platform`;
     const html=`<div style="margin:0;background:#f5f7fb;padding:32px 16px;font-family:Arial,Helvetica,sans-serif;color:#172033"><div style="max-width:620px;margin:0 auto;background:#fff;border:1px solid #e5e9f2;border-radius:20px;overflow:hidden"><div style="padding:26px 30px;background:#315bea;color:#fff"><div style="font-size:22px;font-weight:800;letter-spacing:.4px">ORGROOM</div><div style="margin-top:4px;font-size:13px;opacity:.9">Facility Reservation Platform</div></div><div style="padding:30px"><h1 style="margin:0 0 10px;font-size:23px">${escapeHtml(subject.replace('ORGROOM — ','ORGROOM — '))}</h1><p style="margin:0 0 22px;color:#667085;line-height:1.6">${escapeHtml(intro)}</p><div style="padding:18px;background:#f7f9fc;border:1px solid #e6eaf0;border-radius:14px"><p style="margin:0 0 8px"><strong>Requester:</strong> ${escapeHtml(d.requesterName)}</p><p style="margin:8px 0"><strong>Building:</strong> ${escapeHtml(d.building)}</p><p style="margin:8px 0"><strong>Room:</strong> ${escapeHtml(d.room)}</p><p style="margin:8px 0"><strong>Date:</strong> ${escapeHtml(d.date)}</p><p style="margin:8px 0"><strong>Time:</strong> ${escapeHtml(d.time)}</p><p style="margin:8px 0"><strong>Purpose:</strong> ${escapeHtml(d.purpose)}</p><p style="margin:8px 0"><strong>Status:</strong> ${escapeHtml(statusLabel)}</p>${reviewer}${reason}</div>${action}<p style="margin:24px 0 0;font-size:12px;color:#7b8494;line-height:1.6">ORGROOM — Facility Reservation Platform</p></div></div></div>`;
     await sendEmail({
   to: email,
@@ -296,17 +457,18 @@ async function notifyReservationEvent(reservationId,type){
     if(!row) return;
     const d=reservationNotificationDetails(row);
     d.reservationId=Number(reservationId);
-    const admins=await dbQuery("SELECT id,name,email FROM users WHERE LOWER(role) IN ('admin','super_admin') AND is_verified=1 AND (? IS NULL OR id<>?) ORDER BY id",[row.user_id==null?null:Number(row.user_id),row.user_id==null?0:Number(row.user_id)]);
+    const admins=await dbQuery("SELECT id,name,email FROM users WHERE LOWER(role) IN ('admin','super_admin') AND is_verified=1 AND (? IS NULL OR id<>?) AND (?<>'admin' OR LOWER(role)='super_admin') ORDER BY id",[row.user_id==null?null:Number(row.user_id),row.user_id==null?0:Number(row.user_id),String(row.user_role||'teacher').toLowerCase()]);
     const labels={
       NEW_RESERVATION_REQUEST:{title:'New reservation request',adminMessage:`${d.requesterName} (${d.requesterEmail}) submitted ${d.building} — ${d.room} for ${d.date} · ${d.time}. Purpose: ${d.purpose}`,userTitle:'Reservation request submitted',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} is now pending admin review.`},
-      RESERVATION_APPROVED:{title:'Reservation approved',adminMessage:`${d.requesterName}'s request for ${d.building} — ${d.room} was approved by ${d.decisionBy || 'an administrator'}.`,userTitle:'Reservation approved',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was approved by ${d.decisionBy || 'an administrator'}.`},
+      RESERVATION_APPROVED:{title:'Reservation approved',adminMessage:`${d.requesterName}'s request for ${d.building} — ${d.room} was approved${d.decisionSource==='SYSTEM_AUTO_APPROVAL'?' automatically by ORGROOM':' by '+(d.decisionBy || 'an administrator')}.`,userTitle:'Reservation approved',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was approved${d.decisionSource==='SYSTEM_AUTO_APPROVAL'?' automatically by ORGROOM':' by '+(d.decisionBy || 'an administrator')}.`},
       RESERVATION_REJECTED:{title:'Reservation rejected',adminMessage:`${d.requesterName}'s request for ${d.building} — ${d.room} was rejected by ${d.decisionBy || 'an administrator'}.`,userTitle:'Reservation rejected',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was rejected by ${d.decisionBy || 'an administrator'}.`},
       RESERVATION_CANCELLED:{title:'Reservation cancelled',adminMessage:`${d.requesterName} cancelled the request for ${d.building} — ${d.room} on ${d.date} · ${d.time}.`,userTitle:'Reservation cancelled',userMessage:`Your request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was cancelled.`},
-      RESERVATION_MODIFIED:{title:'Reservation request modified',adminMessage:`${d.requesterName} modified the pending request for ${d.building} — ${d.room} on ${d.date} · ${d.time}.`,userTitle:'Reservation request updated',userMessage:`Your pending request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was updated.`}
+      RESERVATION_MODIFIED:{title:'Reservation request modified',adminMessage:`${d.requesterName} modified the pending request for ${d.building} — ${d.room} on ${d.date} · ${d.time}.`,userTitle:'Reservation request updated',userMessage:`Your pending request for ${d.building} — ${d.room} on ${d.date} · ${d.time} was updated.`},
+      RESERVATION_OVERRIDDEN:{title:'Reservation decision updated',adminMessage:`A Super Admin changed the decision for ${d.requesterName}'s reservation for ${d.building} — ${d.room}. New status: ${d.status}. Reason: ${d.adminNotes || 'See ORGROOM for details.'}`,userTitle:'Reservation decision updated',userMessage:`A Super Admin changed your reservation decision. New status: ${d.status}. Reason: ${d.adminNotes || 'See ORGROOM for details.'}`}
     };
     const label=labels[type]; if(!label) return;
     const eventKey=`reservation:${reservationId}:${type}:${String(d.updatedAt||d.decisionAt||d.submittedAt||'').replace(/\s+/g,'_')}`;
-    if(type==='NEW_RESERVATION_REQUEST' || type==='RESERVATION_CANCELLED' || type==='RESERVATION_MODIFIED'){
+    if(type==='NEW_RESERVATION_REQUEST' || type==='RESERVATION_CANCELLED' || type==='RESERVATION_MODIFIED' || type==='RESERVATION_OVERRIDDEN'){
       for(const admin of admins){
         await createNotification({recipientUserId:Number(admin.id),type,reservationId,eventKey:`${eventKey}:admin:${admin.id}`,title:label.title,message:label.adminMessage,email:admin.email,details:{...d,recipientName:admin.name,isAdmin:true}});
       }
@@ -319,7 +481,7 @@ async function notifyReservationEvent(reservationId,type){
 
 async function issueCode(email, purpose, payload = {}) {
   const existing = await dbQuery('SELECT created_at FROM verification_codes WHERE email=? AND purpose=? ORDER BY id DESC LIMIT 1', [email, purpose]);
-  if (existing[0] && Date.now() - new Date(existing[0].created_at).getTime() < RESEND_COOLDOWN_MS) throw new Error('Please wait 30 seconds before requesting another code.');
+  if (existing[0] && Date.now() - new Date(toUtcIso(existing[0].created_at)).getTime() < RESEND_COOLDOWN_MS) throw new Error('Please wait 30 seconds before requesting another code.');
   const code = createCode();
   const hash = await bcrypt.hash(code, 10);
   await dbQuery('DELETE FROM verification_codes WHERE email=? AND purpose=?', [email, purpose]);
@@ -332,7 +494,7 @@ async function consumeCode(email, purpose, code) {
   const rows = await dbQuery('SELECT id,code_hash,expires_at,attempts FROM verification_codes WHERE email=? AND purpose=? ORDER BY id DESC LIMIT 1', [email, purpose]);
   const record = rows[0];
   if (!record) throw new Error('Invalid verification code.');
-  if (new Date(record.expires_at).getTime() < Date.now()) {
+  if (new Date(toUtcIso(record.expires_at)).getTime() < Date.now()) {
     await dbQuery('DELETE FROM verification_codes WHERE id=?', [record.id]);
     throw new Error('This verification code has expired. Please request a new code.');
   }
@@ -361,12 +523,12 @@ function mapFacility(row) {
   return { id: row.id, name: row.name, building: row.building, buildingCode: row.building_code, capacity: row.capacity == null ? null : Number(row.capacity), type: row.type, description: row.description || '', imageUrl: row.image_url || row.imageUrl || '', status: row.status || 'AVAILABLE', amenities: Array.isArray(row.amenities) ? row.amenities : (typeof row.amenities === 'string' ? JSON.parse(row.amenities || '[]') : []) };
 }
 function mapReservation(row) {
-  return { id: `OR-${String(row.id).padStart(3,'0')}`, dbId: Number(row.id), userId: row.user_id == null ? null : Number(row.user_id), userName: row.user_name, userEmail: row.user_email, userRole: row.user_role, orgName: row.organization_name, roomName: row.room_name, building: row.building, facilityId: row.facility_id, date: String(row.reservation_date).slice(0,10), timeSlot: row.time_slot, attendees: Number(row.attendees), purpose: row.purpose, eventType: row.event_type, status: row.status, submittedAt: String(row.submitted_at), adminNotes: row.admin_notes || '', decisionByUserId: row.decision_by_user_id == null ? null : Number(row.decision_by_user_id), decisionByName: row.decision_by_name || '', decisionByEmail: row.decision_by_email || '', decisionAt: row.decision_at ? String(row.decision_at) : null, priority: Boolean(row.priority), startMs: row.start_ms == null ? null : Number(row.start_ms), endMs: row.end_ms == null ? null : Number(row.end_ms), startReminderStatus: row.start_reminder_status || 'PENDING', startReminderSentAt: row.start_reminder_sent_at ? String(row.start_reminder_sent_at) : null, endReminderStatus: row.end_reminder_status || 'PENDING', endReminderSentAt: row.end_reminder_sent_at ? String(row.end_reminder_sent_at) : null };
+  const [startMs, endMs] = reservationTimeRange(row.reservation_date, row.time_slot);
+  return { id: `OR-${String(row.id).padStart(3,'0')}`, dbId: Number(row.id), userId: row.user_id == null ? null : Number(row.user_id), userName: row.user_name, userEmail: row.user_email, userRole: row.user_role, orgName: row.organization_name, roomName: row.room_name, building: row.building, facilityId: row.facility_id, date: String(row.reservation_date).slice(0,10), timeSlot: row.time_slot, attendees: Number(row.attendees), purpose: row.purpose, eventType: row.event_type, status: row.status, submittedAt: toUtcIso(row.submitted_at) || '', adminNotes: row.admin_notes || '', decisionByUserId: row.decision_by_user_id == null ? null : Number(row.decision_by_user_id), decisionByName: row.decision_by_name || '', decisionByEmail: row.decision_by_email || '', decisionAt: toUtcIso(row.decision_at), decisionSource: row.decision_source || 'MANUAL', priority: Boolean(row.priority), startMs: startMs == null ? (row.start_ms == null ? null : Number(row.start_ms)) : startMs, endMs: endMs == null ? (row.end_ms == null ? null : Number(row.end_ms)) : endMs, startReminderStatus: row.start_reminder_status || 'PENDING', startReminderSentAt: toUtcIso(row.start_reminder_sent_at), endReminderStatus: row.end_reminder_status || 'PENDING', endReminderSentAt: toUtcIso(row.end_reminder_sent_at) };
 }
 function mapUsageCheck(row) {
-  return { id:Number(row.id || row.usage_id), reservationId:Number(row.reservation_id), status:row.usage_status || 'NOT_CHECKED', checkedAt:row.checked_at ? String(row.checked_at) : null, checkedBy:row.checked_by_name || '', checkedByEmail:row.checked_by_email || '', note:row.usage_note || row.note || '', createdAt:row.usage_created_at ? String(row.usage_created_at) : (row.created_at ? String(row.created_at) : null), updatedAt:row.usage_updated_at ? String(row.updated_at) : (row.updated_at ? String(row.updated_at) : null) };
+  return { id:Number(row.id || row.usage_id), reservationId:Number(row.reservation_id), status:row.usage_status || 'NOT_CHECKED', checkedAt:toUtcIso(row.checked_at), checkedBy:row.checked_by_name || '', checkedByEmail:row.checked_by_email || '', note:row.usage_note || row.note || '', createdAt:toUtcIso(row.usage_created_at || row.created_at), updatedAt:toUtcIso(row.usage_updated_at || row.updated_at) };
 }
-
 function mapWeekly(row) { return { id: Number(row.id), facilityId: row.facility_id, dayOfWeek: row.day_of_week, startTime: String(row.start_time).slice(0,5), endTime: String(row.end_time).slice(0,5), activityName: row.activity_name, organizationName: row.organization_name || row.program || '', courseCode: row.course_code || '', courseTitle: row.course_title || row.activity_name || '', program: row.program || '', yearBlock: row.year_block || '', instructor: row.instructor || '', termStart: row.term_start ? String(row.term_start).slice(0,10) : '', termEnd: row.term_end ? String(row.term_end).slice(0,10) : '', termDatesText: row.term_dates_text || '', sourceSheet: row.source_sheet || '', description: row.description || '', isActive: Boolean(row.is_active) }; }
 
 function parseTime(value) {
@@ -377,43 +539,226 @@ function parseTime(value) {
   if (ap === 'PM' && h !== 12) h += 12; if (ap === 'AM' && h === 12) h = 0;
   return h * 60 + min;
 }
-function timeSlotParts(slot) { const parts = String(slot || '').split(/\s*-\s*/); return [parseTime(parts[0]), parseTime(parts[1])]; }
-function localTodayISO(){
-  const d=new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-function validateReservationInput({facility, facilityId, roomName, building, date, timeSlot, attendees, purpose}){
-  if(!facilityId || !facility) throw Object.assign(new Error('Please select a valid room from the ORGROOM facility list.'),{status:400});
-  if(String(facility.name)!==String(roomName) || String(facility.building)!==String(building)) throw Object.assign(new Error('The selected room does not match the requested building. Please choose the room again.'),{status:400});
-  if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(String(facility.status||'AVAILABLE').toUpperCase())) throw Object.assign(new Error('The selected room is currently unavailable for reservations.'),{status:409});
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(date||''))) throw Object.assign(new Error('Please provide a valid reservation date.'),{status:400});
-  if(String(date) < localTodayISO()) throw Object.assign(new Error('Reservations cannot be created for a past date.'),{status:400});
-  const [start,end]=timeSlotParts(timeSlot);
-  if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) throw Object.assign(new Error('Invalid reservation time. End time must be later than start time.'),{status:400});
-  if(start<OPERATING_START_MINUTES || end>OPERATING_END_MINUTES) throw Object.assign(new Error('Reservations are available only from 7:00 AM to 9:00 PM.'),{status:400});
-  if(String(date)===localTodayISO() && start <= (new Date().getHours()*60+new Date().getMinutes())) throw Object.assign(new Error('The selected start time has already passed. Please choose a future time.'),{status:400});
-  if(!Number.isFinite(Number(attendees)) || Number(attendees)<1) throw Object.assign(new Error('At least one attendee is required.'),{status:400});
-  if(facility.capacity && Number(attendees)>Number(facility.capacity)) throw Object.assign(new Error(`The selected room capacity is ${facility.capacity}.`),{status:400});
-  if(!String(purpose||'').trim()) throw Object.assign(new Error('Please provide a purpose for the reservation.'),{status:400});
+function timeSlotParts(slot) {
+  const parts = String(slot || '').split(/\s*-\s*/);
+  return [parseTime(parts[0]), parseTime(parts[1])];
 }
 
-async function assertNoConflict({ facilityId, roomName, building, date, timeSlot, excludeId = null, query = dbQuery }) {
-  const [start, end] = timeSlotParts(timeSlot);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error('Invalid reservation time. End time must be later than start time.');
-  const reservations = await query(`SELECT id,time_slot FROM reservations WHERE reservation_date=? AND status IN ('PENDING','APPROVED') AND (facility_id=? OR (facility_id IS NULL AND room_name=? AND building=?))${excludeId ? ' AND id<>?' : ''}`, excludeId ? [date, facilityId, roomName, building, excludeId] : [date, facilityId, roomName, building]);
-  for (const row of reservations) {
-    const [a,b] = timeSlotParts(row.time_slot);
-    if (Number.isFinite(a) && Number.isFinite(b) && a < end && b > start) throw new Error('That room and time already has a pending or approved reservation. Please choose another available time.');
+function assertWithinReservationWindow(start, end) {
+  if (!withinCurrentReservationWindow(start, end)) {
+    throw Object.assign(
+      new Error(currentReservationWindowMessage()),
+      { status: 400 }
+    );
   }
-  if (!facilityId) throw Object.assign(new Error('A valid facility is required for availability checking.'),{status:400});
-  if (facilityId) {
-    const d = new Date(`${date}T12:00:00`);
-    const day = d.toLocaleDateString('en-US', { weekday: 'long' });
-    const schedules = await query(`SELECT start_time,end_time FROM weekly_room_schedules WHERE facility_id=? AND day_of_week=? AND is_active=1 AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' AND (term_start IS NULL OR term_start<=?) AND (term_end IS NULL OR term_end>=?)`,[facilityId,day,date,date]);
-    for (const row of schedules) {
-      const a=dbTimeMinutes(row.start_time), b=dbTimeMinutes(row.end_time);
-      if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a) continue;
-      if (a < end && b > start) throw new Error('That time is occupied by the room’s recurring schedule. Please choose another available time.');
+}
+
+function localTodayISO() {
+  return manilaTodayISO();
+}
+
+function validateReservationInput({
+  facility,
+  facilityId,
+  roomName,
+  building,
+  date,
+  timeSlot,
+  attendees,
+  purpose
+}) {
+  if (!facilityId || !facility) {
+    throw Object.assign(
+      new Error('Please select a valid room from the ORGROOM facility list.'),
+      { status: 400 }
+    );
+  }
+
+  if (
+    String(facility.name) !== String(roomName) ||
+    String(facility.building) !== String(building)
+  ) {
+    throw Object.assign(
+      new Error('The selected room does not match the requested building. Please choose the room again.'),
+      { status: 400 }
+    );
+  }
+
+  if (
+    ['MAINTENANCE', 'INACTIVE', 'CLOSED', 'DISABLED', 'UNAVAILABLE']
+      .includes(String(facility.status || 'AVAILABLE').toUpperCase())
+  ) {
+    throw Object.assign(
+      new Error('The selected room is currently unavailable for reservations.'),
+      { status: 409 }
+    );
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+    throw Object.assign(
+      new Error('Please provide a valid reservation date.'),
+      { status: 400 }
+    );
+  }
+
+  if (String(date) < localTodayISO()) {
+    throw Object.assign(
+      new Error('Reservations cannot be created for a past date.'),
+      { status: 400 }
+    );
+  }
+
+  const [start, end] = timeSlotParts(timeSlot);
+
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end <= start
+  ) {
+    throw Object.assign(
+      new Error('Invalid reservation time. End time must be later than start time.'),
+      { status: 400 }
+    );
+  }
+
+  assertWithinReservationWindow(start, end);
+
+  if (
+    String(date) === localTodayISO() &&
+    start <= manilaCurrentMinutes()
+  ) {
+    throw Object.assign(
+      new Error('The selected start time has already passed. Please choose a future time.'),
+      { status: 400 }
+    );
+  }
+
+  if (!Number.isFinite(Number(attendees)) || Number(attendees) < 1) {
+    throw Object.assign(
+      new Error('At least one attendee is required.'),
+      { status: 400 }
+    );
+  }
+
+  if (facility.capacity && Number(attendees) > Number(facility.capacity)) {
+    throw Object.assign(
+      new Error(`The selected room capacity is ${facility.capacity}.`),
+      { status: 400 }
+    );
+  }
+
+  if (!String(purpose || '').trim()) {
+    throw Object.assign(
+      new Error('Please provide a purpose for the reservation.'),
+      { status: 400 }
+    );
+  }
+}
+
+async function assertNoConflict({
+  facilityId,
+  roomName,
+  building,
+  date,
+  timeSlot,
+  excludeId = null,
+  query = dbQuery
+}) {
+  const [start, end] = timeSlotParts(timeSlot);
+
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end <= start
+  ) {
+    throw new Error(
+      'Invalid reservation time. End time must be later than start time.'
+    );
+  }
+
+  // Also protects the Admin approval endpoint:
+  // older pending requests cannot bypass the new reservation window.
+  assertWithinReservationWindow(start, end);
+
+  // Preserve existing pending and approved reservation checks.
+  const reservations = await query(
+    `SELECT id,time_slot
+     FROM reservations
+     WHERE reservation_date=?
+       AND status IN ('PENDING','APPROVED')
+       AND (
+         facility_id=?
+         OR (facility_id IS NULL AND room_name=? AND building=?)
+       )${excludeId ? ' AND id<>?' : ''}`,
+    excludeId
+      ? [date, facilityId, roomName, building, excludeId]
+      : [date, facilityId, roomName, building]
+  );
+
+  for (const row of reservations) {
+    const [a, b] = timeSlotParts(row.time_slot);
+
+    // Exact-minute overlap checking is preserved.
+    if (
+      Number.isFinite(a) &&
+      Number.isFinite(b) &&
+      a < end &&
+      b > start
+    ) {
+      throw new Error(
+        'That room and time already has a pending or approved reservation. Please choose another available time.'
+      );
+    }
+  }
+
+  if (!facilityId) {
+    throw Object.assign(
+      new Error('A valid facility is required for availability checking.'),
+      { status: 400 }
+    );
+  }
+
+  const d = new Date(`${date}T12:00:00Z`);
+  const day = d.toLocaleDateString('en-US', {
+    weekday: 'long',
+    timeZone: ORGROOM_TIME_ZONE
+  });
+
+  const schedules = await query(
+    `SELECT start_time,end_time
+     FROM weekly_room_schedules
+     WHERE facility_id=?
+       AND day_of_week=?
+       AND is_active=1
+       AND HOUR(start_time)<24
+       AND HOUR(end_time)<24
+       AND end_time>start_time
+       AND UPPER(TRIM(activity_name)) NOT IN (
+         'MONDAY','TUESDAY','WEDNESDAY','THURSDAY',
+         'FRIDAY','SATURDAY','SUNDAY'
+       )
+       AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%'
+       AND (term_start IS NULL OR term_start<=?)
+       AND (term_end IS NULL OR term_end>=?)`,
+    [facilityId, day, date, date]
+  );
+
+  for (const row of schedules) {
+    const a = dbTimeMinutes(row.start_time);
+    const b = dbTimeMinutes(row.end_time);
+
+    if (
+      !Number.isFinite(a) ||
+      !Number.isFinite(b) ||
+      b <= a
+    ) {
+      continue;
+    }
+
+    if (a < end && b > start) {
+      throw new Error(
+        'That time is occupied by the room’s recurring schedule. Please choose another available time.'
+      );
     }
   }
 }
@@ -537,7 +882,7 @@ app.get('/api/users', async(req,res)=>{
       position:row.position||'',
       isVerified:Boolean(row.is_verified),
       isActive:Boolean(row.is_active),
-      createdAt:String(row.created_at)
+      createdAt:toUtcIso(row.created_at)
     })));
   }catch(e){
     console.error(`ORGROOM user list failed: ${e.message||e}`);
@@ -554,9 +899,9 @@ app.get('/api/users/capacity', async(req,res)=>{
     res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json({
       currentCount,
-      maxAccounts:MAX_ACCOUNT_CAPACITY,
-      remainingSlots:Math.max(0,MAX_ACCOUNT_CAPACITY-currentCount),
-      isAtCapacity:currentCount>=MAX_ACCOUNT_CAPACITY
+      maxAccounts:runtimeSystemSettings.maxAccounts,
+      remainingSlots:Math.max(0,runtimeSystemSettings.maxAccounts-currentCount),
+      isAtCapacity:currentCount>=runtimeSystemSettings.maxAccounts
     });
   }catch(e){
     console.error(`ORGROOM account capacity lookup failed: ${e.message||e}`);
@@ -597,8 +942,8 @@ app.post('/api/users', async(req,res)=>{
     transactionStarted=true;
     const [countRows]=await connection.query('SELECT COUNT(*) AS total FROM users');
     const currentCount=Number(countRows[0]?.total||0);
-    if(currentCount>=MAX_ACCOUNT_CAPACITY){
-      const capacityError=new Error(`The ORGROOM account capacity has been reached (${currentCount} / ${MAX_ACCOUNT_CAPACITY}). Increase the configured account limit before creating another. Deactivated accounts still count.`);
+    if(currentCount>=runtimeSystemSettings.maxAccounts){
+      const capacityError=new Error(`The ORGROOM account capacity has been reached (${currentCount} / ${runtimeSystemSettings.maxAccounts}). Increase the configured account limit before creating another. Deactivated accounts still count.`);
       capacityError.status=409;
       throw capacityError;
     }
@@ -615,6 +960,16 @@ app.post('/api/users', async(req,res)=>{
       [name,email,passwordHash,role,organization,department,position]
     );
     const userId=Number(createdResult.insertId);
+    await writeAuditEvent({
+      actor: admin,
+      action: 'USER_CREATED',
+      entityType: 'USER',
+      entityId: userId,
+      newValues: { id: userId, name, email, role, organization, department, position, isActive: true, isVerified: false }
+    }, async (sql, params = []) => {
+      const [result] = await connection.query(sql, params);
+      return result;
+    });
     await connection.commit();
     transactionStarted=false;
 
@@ -635,7 +990,7 @@ app.post('/api/users', async(req,res)=>{
       user:{
         id:Number(created.id),name:created.name,email:created.email,role:String(created.role).toUpperCase(),
         organization:created.organization||'',department:created.department||'',position:created.position||'',
-        isVerified:Boolean(created.is_verified),isActive:Boolean(created.is_active),createdAt:String(created.created_at)
+        isVerified:Boolean(created.is_verified),isActive:Boolean(created.is_active),createdAt:toUtcIso(created.created_at)
       }
     });
   }catch(e){
@@ -698,8 +1053,16 @@ app.patch('/api/users/:id', async(req,res)=>{
       if(nextActive){try{await issueCode(nextEmail,'login',{userId:targetId});}catch(e){console.error(`ORGROOM changed-email verification failed for ${nextEmail}: ${e.message||e}`);}}
     }
     const updated=(await dbQuery('SELECT id,name,email,role,organization,department,position,is_verified,is_active,created_at FROM users WHERE id=?',[targetId]))[0];
+    await writeAuditEvent({
+      actor,
+      action: !Boolean(target.is_active) && nextActive ? 'USER_RESTORED' : 'USER_UPDATED',
+      entityType: 'USER',
+      entityId: targetId,
+      previousValues: { name: target.name, email: target.email, role: targetRole, isActive: Boolean(target.is_active), isVerified: Boolean(target.is_verified) },
+      newValues: { name: updated.name, email: updated.email, role: normalizeRole(updated.role), isActive: Boolean(updated.is_active), isVerified: Boolean(updated.is_verified) }
+    });
     res.set('Cache-Control','no-store');
-    res.json({message:emailChanged?'Account updated. The new email must be verified at the next sign-in.':'Account updated successfully.',user:{id:Number(updated.id),name:updated.name,email:updated.email,role:normalizeRole(updated.role),organization:updated.organization||'',department:updated.department||'',position:updated.position||'',isVerified:Boolean(updated.is_verified),isActive:Boolean(updated.is_active),createdAt:String(updated.created_at)}});
+    res.json({message:emailChanged?'Account updated. The new email must be verified at the next sign-in.':'Account updated successfully.',user:{id:Number(updated.id),name:updated.name,email:updated.email,role:normalizeRole(updated.role),organization:updated.organization||'',department:updated.department||'',position:updated.position||'',isVerified:Boolean(updated.is_verified),isActive:Boolean(updated.is_active),createdAt:toUtcIso(updated.created_at)}});
   }catch(e){
     console.error(`ORGROOM user update failed: ${e.message||e}`);
     res.status(500).json({message:'Unable to update the account.'});
@@ -720,6 +1083,14 @@ app.delete('/api/users/:id', async(req,res)=>{
     if(!isSuperAdminRole(actor.role) && targetRole!=='TEACHER') return res.status(403).json({message:'Admins can deactivate Teacher accounts only.'});
     await dbQuery('UPDATE users SET is_active=0 WHERE id=?',[targetId]);
     await dbQuery('DELETE FROM auth_sessions WHERE user_id=?',[targetId]);
+    await writeAuditEvent({
+      actor,
+      action: 'USER_DEACTIVATED',
+      entityType: 'USER',
+      entityId: targetId,
+      previousValues: { role: targetRole, isActive: Boolean(target.is_active) },
+      newValues: { role: targetRole, isActive: false }
+    });
     res.json({message:'Account deactivated. Reservation and account history have been preserved.'});
   }catch(e){
     console.error(`ORGROOM user deactivation failed: ${e.message||e}`);
@@ -727,6 +1098,513 @@ app.delete('/api/users/:id', async(req,res)=>{
   }
 });
 
+
+// ------------------------------------------------------------
+// Super Admin system oversight, global configuration, and audit APIs
+// ------------------------------------------------------------
+app.get('/api/system/config', async (req, res) => {
+  try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      timeZone: ORGROOM_TIME_ZONE,
+      maxAccounts: runtimeSystemSettings.maxAccounts,
+      reservationStartMinutes: runtimeSystemSettings.reservationStartMinutes,
+      reservationEndMinutes: runtimeSystemSettings.reservationEndMinutes
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to load the current system configuration.' });
+  }
+});
+
+app.get('/api/super-admin/settings', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  res.set('Cache-Control', 'no-store');
+  res.json({ ...runtimeSystemSettings, timeZone: ORGROOM_TIME_ZONE });
+});
+
+app.put('/api/super-admin/settings', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+
+  let connection;
+  let lockAcquired = false;
+  let transactionStarted = false;
+  try {
+    const maxAccounts = Number(req.body.maxAccounts);
+    const reservationStartMinutes = Number(req.body.reservationStartMinutes);
+    const reservationEndMinutes = Number(req.body.reservationEndMinutes);
+    const reason = String(req.body.reason || '').trim().slice(0, 2000);
+    if (reason.length < 5) return res.status(400).json({ message: 'Provide a reason of at least five characters for changing global settings.' });
+
+    if (!Number.isInteger(maxAccounts) || maxAccounts < 1 || maxAccounts > 1000) {
+      return res.status(400).json({ message: 'Account capacity must be a whole number from 1 to 1,000.' });
+    }
+    if (
+      !Number.isInteger(reservationStartMinutes) ||
+      !Number.isInteger(reservationEndMinutes) ||
+      reservationStartMinutes < 0 ||
+      reservationEndMinutes > 1439 ||
+      reservationStartMinutes >= reservationEndMinutes
+    ) {
+      return res.status(400).json({ message: 'Reservation start and end times must be valid minutes after midnight, with the start earlier than the end.' });
+    }
+
+    connection = await pool.getConnection();
+    const [locks] = await connection.query('SELECT GET_LOCK(?, 15) AS acquired', [ACCOUNT_CAPACITY_LOCK_NAME]);
+    lockAcquired = Number(locks[0]?.acquired) === 1;
+    if (!lockAcquired) return res.status(503).json({ message: 'System settings are busy. Please try again.' });
+
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const [countRows] = await connection.query('SELECT COUNT(*) AS total FROM users');
+    const currentCount = Number(countRows[0]?.total || 0);
+    if (maxAccounts < currentCount) {
+      throw Object.assign(new Error(`The account capacity cannot be lower than the current ${currentCount} accounts. Deactivated accounts are included.`), { status: 409 });
+    }
+
+    const [activeReservations] = await connection.query(
+      `SELECT id,time_slot FROM reservations WHERE status IN ('PENDING','APPROVED')`
+    );
+    const outsideWindow = activeReservations.find(row => {
+      const [start, end] = timeSlotParts(row.time_slot);
+      return !isWithinReservationWindow(start, end, reservationStartMinutes, reservationEndMinutes);
+    });
+    if (outsideWindow) {
+      throw Object.assign(new Error(`The new reservation window would exclude active reservation OR-${String(outsideWindow.id).padStart(3, '0')}. Resolve that reservation before narrowing the operating hours.`), { status: 409 });
+    }
+
+    const previousValues = { ...runtimeSystemSettings };
+    const nextValues = { maxAccounts, reservationStartMinutes, reservationEndMinutes };
+    for (const [key, value] of Object.entries({
+      max_accounts: maxAccounts,
+      reservation_start_minutes: reservationStartMinutes,
+      reservation_end_minutes: reservationEndMinutes
+    })) {
+      await connection.query(
+        `INSERT INTO orgroom_system_settings (setting_key,setting_value,updated_by_user_id)
+         VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),updated_by_user_id=VALUES(updated_by_user_id),updated_at=CURRENT_TIMESTAMP`,
+        [key, String(value), actor.id]
+      );
+    }
+    await writeAuditEvent({
+      actor,
+      action: 'SYSTEM_SETTINGS_UPDATED',
+      entityType: 'SYSTEM_SETTINGS',
+      entityId: 'global',
+      previousValues,
+      newValues: nextValues,
+      reason
+    }, async (sql, params = []) => {
+      const [result] = await connection.query(sql, params);
+      return result;
+    });
+    await connection.commit();
+    transactionStarted = false;
+    await refreshRuntimeSystemSettings();
+    res.json({ message: 'Global system settings updated.', ...runtimeSystemSettings, timeZone: ORGROOM_TIME_ZONE });
+  } catch (error) {
+    if (transactionStarted && connection) {
+      try { await connection.rollback(); } catch {}
+    }
+    console.error(`ORGROOM system settings update failed: ${error.message || error}`);
+    res.status(error.status || 500).json({ message: error.message || 'Unable to update global system settings.' });
+  } finally {
+    if (connection) {
+      if (lockAcquired) {
+        try { await connection.query('SELECT RELEASE_LOCK(?)', [ACCOUNT_CAPACITY_LOCK_NAME]); } catch {}
+      }
+      connection.release();
+    }
+  }
+});
+
+app.get('/api/super-admin/audit-logs', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 100));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const rows = await dbQuery(
+      `SELECT id,actor_user_id,actor_name,actor_email,actor_role,action,entity_type,entity_id,
+              previous_values,new_values,reason,created_at
+       FROM orgroom_audit_logs ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+    res.set('Cache-Control', 'no-store');
+    res.json(rows.map(row => ({
+      id: Number(row.id), actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
+      actorName: row.actor_name, actorEmail: row.actor_email, actorRole: row.actor_role,
+      action: row.action, entityType: row.entity_type, entityId: row.entity_id,
+      previousValues: parseJsonColumn(row.previous_values), newValues: parseJsonColumn(row.new_values),
+      reason: row.reason || '', createdAt: toUtcIso(row.created_at)
+    })));
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to load the audit log.' });
+  }
+});
+
+app.get('/api/super-admin/reports', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const [userRows, reservationRows, facilityRows, adminActivityRows] = await Promise.all([
+      dbQuery(`SELECT COUNT(*) AS total,
+        SUM(is_active=1) AS active,
+        SUM(UPPER(role)='TEACHER') AS teachers,
+        SUM(UPPER(role)='ADMIN') AS admins,
+        SUM(UPPER(role)='SUPER_ADMIN') AS superAdmins
+        FROM users`),
+      dbQuery(`SELECT status,COUNT(*) AS total FROM reservations GROUP BY status`),
+      dbQuery(`SELECT f.id,f.name,f.building,f.status,
+          COUNT(r.id) AS reservationCount,
+          SUM(CASE WHEN r.status='APPROVED' THEN 1 ELSE 0 END) AS approvedCount,
+          SUM(CASE WHEN r.status='PENDING' THEN 1 ELSE 0 END) AS pendingCount,
+          COALESCE(SUM(CASE WHEN r.status='APPROVED' THEN r.attendees ELSE 0 END),0) AS approvedAttendees
+        FROM facilities f LEFT JOIN reservations r ON r.facility_id=f.id
+        GROUP BY f.id,f.name,f.building,f.status
+        ORDER BY reservationCount DESC,f.building,f.name`),
+      dbQuery(`SELECT actor_user_id,actor_name,actor_email,actor_role,COUNT(*) AS actionCount,
+          MAX(created_at) AS lastActivity
+        FROM orgroom_audit_logs
+        WHERE actor_role IN ('ADMIN','SUPER_ADMIN')
+        GROUP BY actor_user_id,actor_name,actor_email,actor_role
+        ORDER BY actionCount DESC,lastActivity DESC LIMIT 20`)
+    ]);
+    const reservationStats = Object.fromEntries(reservationRows.map(row => [String(row.status).toUpperCase(), Number(row.total || 0)]));
+    const user = userRows[0] || {};
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      users: {
+        total: Number(user.total || 0), active: Number(user.active || 0),
+        teachers: Number(user.teachers || 0), admins: Number(user.admins || 0),
+        superAdmins: Number(user.superAdmins || 0)
+      },
+      reservations: {
+        total: Object.values(reservationStats).reduce((sum, value) => sum + value, 0),
+        pending: reservationStats.PENDING || 0, approved: reservationStats.APPROVED || 0,
+        rejected: reservationStats.REJECTED || 0, cancelled: reservationStats.CANCELLED || 0
+      },
+      facilities: facilityRows.map(row => ({
+        id: Number(row.id), name: row.name, building: row.building, status: row.status,
+        reservationCount: Number(row.reservationCount || 0), approvedCount: Number(row.approvedCount || 0),
+        pendingCount: Number(row.pendingCount || 0), approvedAttendees: Number(row.approvedAttendees || 0)
+      })),
+      adminActivity: adminActivityRows.map(row => ({
+        actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
+        actorName: row.actor_name, actorEmail: row.actor_email, actorRole: row.actor_role,
+        actionCount: Number(row.actionCount || 0), lastActivity: toUtcIso(row.lastActivity)
+      }))
+    });
+  } catch (error) {
+    console.error(`ORGROOM reports failed: ${error.message || error}`);
+    res.status(500).json({ message: 'Unable to load system reports.' });
+  }
+});
+
+app.get('/api/super-admin/reservations/:id/history', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const reservationId = Number(String(req.params.id).replace(/^OR-/i, ''));
+    if (!Number.isInteger(reservationId) || reservationId <= 0) return res.status(400).json({ message: 'Invalid reservation reference.' });
+    const rows = await dbQuery(
+      `SELECT * FROM reservation_decision_history WHERE reservation_id=? ORDER BY id DESC`,
+      [reservationId]
+    );
+    res.json(rows.map(row => ({
+      id: Number(row.id), reservationId: Number(row.reservation_id), fromStatus: row.from_status,
+      toStatus: row.to_status, actionType: row.action_type, actorUserId: row.actor_user_id == null ? null : Number(row.actor_user_id),
+      actorName: row.actor_name, actorRole: row.actor_role, reason: row.reason || '', createdAt: toUtcIso(row.created_at)
+    })));
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to load reservation decision history.' });
+  }
+});
+
+app.get('/api/super-admin/weekly-schedules', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const rows = await dbQuery('SELECT * FROM weekly_room_schedules ORDER BY facility_id,day_of_week,start_time,id');
+    res.json(rows.map(mapWeekly));
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to load weekly schedules for management.' });
+  }
+});
+
+function normalizeSchedulePayload(body = {}) {
+  const dayOfWeek = String(body.dayOfWeek || '').trim();
+  const allowedDays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const timeValue = value => {
+    const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return null;
+    const hour = Number(match[1]), minute = Number(match[2]), second = Number(match[3] || 0);
+    if (hour > 23 || minute > 59 || second > 59) return null;
+    return { minutes: hour * 60 + minute, sql: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}` };
+  };
+  const start = timeValue(body.startTime);
+  const end = timeValue(body.endTime);
+  const dateValue = value => !value || /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+  if (!allowedDays.includes(dayOfWeek)) throw Object.assign(new Error('Choose a valid day of the week.'), { status: 400 });
+  if (!start || !end || end.minutes <= start.minutes) throw Object.assign(new Error('Enter valid schedule times and make sure the end is later than the start.'), { status: 400 });
+  if (!String(body.activityName || '').trim()) throw Object.assign(new Error('An activity or course name is required.'), { status: 400 });
+  if (!dateValue(body.termStart) || !dateValue(body.termEnd)) throw Object.assign(new Error('Term dates must use YYYY-MM-DD.'), { status: 400 });
+  if (body.termStart && body.termEnd && body.termEnd < body.termStart) throw Object.assign(new Error('The term end date cannot be earlier than the term start date.'), { status: 400 });
+  const facilityId = Number(body.facilityId);
+  if (!Number.isInteger(facilityId) || facilityId <= 0) throw Object.assign(new Error('Choose a valid facility.'), { status: 400 });
+  return {
+    facilityId, dayOfWeek, startTime: start.sql, endTime: end.sql,
+    activityName: String(body.activityName).trim().slice(0, 255),
+    courseCode: String(body.courseCode || '').trim().slice(0, 80),
+    courseTitle: String(body.courseTitle || body.activityName).trim().slice(0, 255),
+    program: String(body.program || '').trim().slice(0, 255),
+    yearBlock: String(body.yearBlock || '').trim().slice(0, 255),
+    instructor: String(body.instructor || '').trim().slice(0, 255),
+    termStart: body.termStart || null, termEnd: body.termEnd || null,
+    termDatesText: String(body.termDatesText || '').trim().slice(0, 255),
+    isActive: body.isActive === undefined ? true : Boolean(body.isActive)
+  };
+}
+
+async function assertWeeklyScheduleNoOverlap(data, excludeId = null) {
+  const existing = await dbQuery(
+    `SELECT id,start_time,end_time,term_start,term_end
+     FROM weekly_room_schedules
+     WHERE facility_id=? AND day_of_week=? AND is_active=1
+       AND (? IS NULL OR id<>?)`,
+    [data.facilityId, data.dayOfWeek, excludeId, excludeId]
+  );
+  const nextStart = dbTimeMinutes(data.startTime);
+  const nextEnd = dbTimeMinutes(data.endTime);
+  for (const row of existing) {
+    const timeOverlap = nextStart < dbTimeMinutes(row.end_time) && dbTimeMinutes(row.start_time) < nextEnd;
+    const dateOverlap =
+      (!row.term_end || !data.termStart || String(row.term_end).slice(0,10) >= data.termStart) &&
+      (!data.termEnd || !row.term_start || String(data.termEnd) >= String(row.term_start).slice(0,10));
+    if (timeOverlap && dateOverlap) {
+      throw Object.assign(new Error(`This schedule overlaps existing active schedule record #${row.id} for the same room and day.`), { status: 409 });
+    }
+  }
+}
+
+app.post('/api/super-admin/weekly-schedules', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const data = normalizeSchedulePayload(req.body);
+    const reason = String(req.body.reason || '').trim();
+    if (reason.length < 5) return res.status(400).json({ message: 'Provide a reason of at least five characters for the schedule change.' });
+    const facility = (await dbQuery('SELECT id,name,building FROM facilities WHERE id=? LIMIT 1', [data.facilityId]))[0];
+    if (!facility) return res.status(404).json({ message: 'The selected facility was not found.' });
+    if (data.isActive) await assertWeeklyScheduleNoOverlap(data);
+    const result = await dbQuery(
+      `INSERT INTO weekly_room_schedules
+       (facility_id,day_of_week,start_time,end_time,activity_name,course_code,course_title,program,year_block,instructor,term_start,term_end,term_dates_text,is_active)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [data.facilityId,data.dayOfWeek,data.startTime,data.endTime,data.activityName,data.courseCode,data.courseTitle,data.program,data.yearBlock,data.instructor,data.termStart,data.termEnd,data.termDatesText,data.isActive ? 1 : 0]
+    );
+    const row = (await dbQuery('SELECT * FROM weekly_room_schedules WHERE id=?', [result.insertId]))[0];
+    await writeAuditEvent({ actor, action: 'WEEKLY_SCHEDULE_CREATED', entityType: 'WEEKLY_ROOM_SCHEDULE', entityId: result.insertId, newValues: data, reason });
+    res.status(201).json(mapWeekly(row));
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message || 'Unable to create the weekly schedule.' });
+  }
+});
+
+app.patch('/api/super-admin/weekly-schedules/:id', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid weekly schedule reference.' });
+    const current = (await dbQuery('SELECT * FROM weekly_room_schedules WHERE id=? LIMIT 1', [id]))[0];
+    if (!current) return res.status(404).json({ message: 'Weekly schedule not found.' });
+    const merged = normalizeSchedulePayload({
+      facilityId: req.body.facilityId ?? current.facility_id,
+      dayOfWeek: req.body.dayOfWeek ?? current.day_of_week,
+      startTime: req.body.startTime ?? String(current.start_time).slice(0, 8),
+      endTime: req.body.endTime ?? String(current.end_time).slice(0, 8),
+      activityName: req.body.activityName ?? current.activity_name,
+      courseCode: req.body.courseCode ?? current.course_code,
+      courseTitle: req.body.courseTitle ?? current.course_title,
+      program: req.body.program ?? current.program,
+      yearBlock: req.body.yearBlock ?? current.year_block,
+      instructor: req.body.instructor ?? current.instructor,
+      termStart: req.body.termStart ?? current.term_start,
+      termEnd: req.body.termEnd ?? current.term_end,
+      termDatesText: req.body.termDatesText ?? current.term_dates_text,
+      isActive: req.body.isActive ?? Boolean(current.is_active)
+    });
+    const reason = String(req.body.reason || '').trim();
+    if (reason.length < 5) return res.status(400).json({ message: 'Provide a reason of at least five characters for the schedule change.' });
+    const facility = (await dbQuery('SELECT id FROM facilities WHERE id=? LIMIT 1', [merged.facilityId]))[0];
+    if (!facility) return res.status(404).json({ message: 'The selected facility was not found.' });
+    if (merged.isActive) await assertWeeklyScheduleNoOverlap(merged, id);
+    await dbQuery(
+      `UPDATE weekly_room_schedules SET facility_id=?,day_of_week=?,start_time=?,end_time=?,activity_name=?,course_code=?,course_title=?,program=?,year_block=?,instructor=?,term_start=?,term_end=?,term_dates_text=?,is_active=? WHERE id=?`,
+      [merged.facilityId,merged.dayOfWeek,merged.startTime,merged.endTime,merged.activityName,merged.courseCode,merged.courseTitle,merged.program,merged.yearBlock,merged.instructor,merged.termStart,merged.termEnd,merged.termDatesText,merged.isActive ? 1 : 0,id]
+    );
+    const row = (await dbQuery('SELECT * FROM weekly_room_schedules WHERE id=?', [id]))[0];
+    await writeAuditEvent({ actor, action: 'WEEKLY_SCHEDULE_UPDATED', entityType: 'WEEKLY_ROOM_SCHEDULE', entityId: id, previousValues: mapWeekly(current), newValues: merged, reason });
+    res.json(mapWeekly(row));
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message || 'Unable to update the weekly schedule.' });
+  }
+});
+
+app.delete('/api/super-admin/weekly-schedules/:id', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const id = Number(req.params.id);
+    const reason = String(req.body?.reason || '').trim();
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid weekly schedule reference.' });
+    if (reason.length < 5) return res.status(400).json({ message: 'Provide a reason of at least five characters to deactivate this schedule.' });
+    const current = (await dbQuery('SELECT * FROM weekly_room_schedules WHERE id=? LIMIT 1', [id]))[0];
+    if (!current) return res.status(404).json({ message: 'Weekly schedule not found.' });
+    await dbQuery('UPDATE weekly_room_schedules SET is_active=0 WHERE id=?', [id]);
+    await writeAuditEvent({ actor, action: 'WEEKLY_SCHEDULE_DEACTIVATED', entityType: 'WEEKLY_ROOM_SCHEDULE', entityId: id, previousValues: mapWeekly(current), newValues: { ...mapWeekly(current), isActive: false }, reason });
+    res.json({ message: 'Weekly schedule deactivated. The original record is preserved.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to deactivate the weekly schedule.' });
+  }
+});
+
+app.patch('/api/super-admin/facilities/:id', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid facility reference.' });
+    const current = (await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1', [id]))[0];
+    if (!current) return res.status(404).json({ message: 'Facility not found.' });
+    const reason = String(req.body.reason || '').trim();
+    if (reason.length < 5) return res.status(400).json({ message: 'Provide a reason of at least five characters for the facility change.' });
+    const name = String(req.body.name ?? current.name).trim().slice(0, 255);
+    const building = String(req.body.building ?? current.building).trim().slice(0, 255);
+    const buildingCode = String(req.body.buildingCode ?? current.building_code).trim().slice(0, 100);
+    const type = String(req.body.type ?? current.type).trim().slice(0, 100);
+    const description = String(req.body.description ?? current.description ?? '').trim().slice(0, 5000);
+    const capacityValue = req.body.capacity === undefined ? current.capacity : req.body.capacity;
+    const capacity = capacityValue === '' || capacityValue == null ? null : Number(capacityValue);
+    const status = String(req.body.status ?? current.status ?? 'AVAILABLE').toUpperCase();
+    const imageUrl = String(req.body.imageUrl ?? current.image_url ?? '').trim().slice(0, 1000);
+    const statusValues = ['AVAILABLE','MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'];
+    if (!name || !building || !buildingCode || !type) return res.status(400).json({ message: 'Room name, building, building code, and facility type are required.' });
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000)) return res.status(400).json({ message: 'Capacity must be blank or a whole number from 1 to 10,000.' });
+    if (!statusValues.includes(status)) return res.status(400).json({ message: 'Choose a valid facility status.' });
+    if (imageUrl) {
+      try { const url = new URL(imageUrl); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid'); }
+      catch { return res.status(400).json({ message: 'Facility image must be a valid HTTP or HTTPS URL.' }); }
+    }
+    let amenities;
+    if (req.body.amenities === undefined) amenities = current.amenities || '[]';
+    else {
+      const values = Array.isArray(req.body.amenities) ? req.body.amenities : String(req.body.amenities).split(',');
+      amenities = JSON.stringify(values.map(value => String(value).trim()).filter(Boolean).slice(0, 30));
+    }
+    await dbQuery(
+      `UPDATE facilities SET name=?,building=?,building_code=?,capacity=?,type=?,description=?,status=?,amenities=?,image_url=? WHERE id=?`,
+      [name,building,buildingCode,capacity,type,description,status,amenities,imageUrl || null,id]
+    );
+    const updated = (await dbQuery('SELECT * FROM facilities WHERE id=?', [id]))[0];
+    await writeAuditEvent({
+      actor, action: 'FACILITY_UPDATED', entityType: 'FACILITY', entityId: id,
+      previousValues: mapFacility(current), newValues: mapFacility(updated), reason
+    });
+    res.json(mapFacility(updated));
+  } catch (error) {
+    console.error(`ORGROOM facility update failed: ${error.message || error}`);
+    res.status(error.status || 500).json({ message: error.message || 'Unable to update the facility.' });
+  }
+});
+
+app.post('/api/super-admin/reservations/:id/override', async (req, res) => {
+  const actor = await requireSuperAdminAuth(req, res);
+  if (!actor) return;
+  try {
+    const id = Number(String(req.params.id).replace(/^OR-/i, ''));
+    const nextStatus = String(req.body.status || '').toUpperCase();
+    const reason = String(req.body.reason || '').trim().slice(0, 2000);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ message: 'Invalid reservation reference.' });
+    if (!['PENDING','APPROVED','REJECTED','CANCELLED'].includes(nextStatus)) return res.status(400).json({ message: 'Choose a valid reservation status.' });
+    if (reason.length < 5) return res.status(400).json({ message: 'A reason of at least five characters is required for every Super Admin override.' });
+    const current = (await dbQuery('SELECT * FROM reservations WHERE id=? LIMIT 1', [id]))[0];
+    if (!current) return res.status(404).json({ message: 'Reservation not found.' });
+    if (String(current.status).toUpperCase() === nextStatus) return res.status(409).json({ message: `This reservation is already ${nextStatus}.` });
+    const facilityId = Number(current.facility_id) || null;
+    const lockKey = `${facilityId || `${current.building}|${current.room_name}`}|${String(current.reservation_date).slice(0, 10)}`;
+    const updated = await withReservationLock(lockKey, async connection => {
+      const query = async (sql, params = []) => {
+        const [rows] = await connection.query(sql, params);
+        return rows;
+      };
+      const locked = (await query('SELECT * FROM reservations WHERE id=? FOR UPDATE', [id]))[0];
+      if (!locked) return null;
+      if (String(locked.status).toUpperCase() === nextStatus) {
+        throw Object.assign(new Error(`This reservation is already ${nextStatus}.`), { status: 409 });
+      }
+      if (nextStatus === 'PENDING' && normalizeRole(locked.user_role) === 'SUPER_ADMIN') {
+        throw Object.assign(new Error('Super Admin reservations are automatically approved and cannot be returned to the pending review queue.'), { status: 400 });
+      }
+      if (['PENDING','APPROVED'].includes(nextStatus)) {
+        const facilityId = Number(locked.facility_id) || null;
+        const facility = facilityId
+          ? (await query('SELECT * FROM facilities WHERE id=? LIMIT 1', [facilityId]))[0]
+          : null;
+        validateReservationInput({
+          facility,
+          facilityId,
+          roomName: locked.room_name,
+          building: locked.building,
+          date: String(locked.reservation_date).slice(0, 10),
+          timeSlot: locked.time_slot,
+          attendees: locked.attendees,
+          purpose: locked.purpose
+        });
+        await assertNoConflict({
+          facilityId,
+          roomName: locked.room_name,
+          building: locked.building,
+          date: String(locked.reservation_date).slice(0, 10),
+          timeSlot: locked.time_slot,
+          excludeId: id,
+          query
+        });
+      }
+      const previousStatus = locked.status;
+      const note = `Super Admin override: ${reason}`;
+      await query(
+        `UPDATE reservations SET status=?,admin_notes=?,decision_by_user_id=?,decision_at=NOW(),decision_source='SUPER_ADMIN_OVERRIDE' WHERE id=?`,
+        [nextStatus, note, actor.id, id]
+      );
+      await writeReservationDecisionHistory({
+        reservationId: id, fromStatus: previousStatus, toStatus: nextStatus,
+        actionType: 'SUPER_ADMIN_OVERRIDE', actor, reason
+      }, query);
+      await writeAuditEvent({
+        actor, action: 'RESERVATION_OVERRIDDEN', entityType: 'RESERVATION', entityId: id,
+        previousValues: { status: previousStatus, decisionSource: locked.decision_source || 'MANUAL' },
+        newValues: { status: nextStatus, decisionSource: 'SUPER_ADMIN_OVERRIDE' }, reason
+      }, query);
+      const rows = await query(
+        `SELECT r.*,du.name AS decision_by_name,du.email AS decision_by_email
+         FROM reservations r LEFT JOIN users du ON du.id=r.decision_by_user_id WHERE r.id=?`,
+        [id]
+      );
+      return mapReservation(rows[0]);
+    });
+    if (!updated) return res.status(404).json({ message: 'Reservation not found.' });
+    await notifyReservationEvent(updated.dbId, 'RESERVATION_OVERRIDDEN');
+    res.json(updated);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message || 'Unable to override the reservation decision.' });
+  }
+});
 
 // ------------------------------------------------------------
 // Teacher-to-Admin persistent messaging API
@@ -815,7 +1693,7 @@ app.get('/api/chat/conversation',async(req,res)=>{
     const conversation=rows[0]||null;
     const unreadCount=conversation?await chatUnreadCount(conversation.id,user):0;
     res.set('Cache-Control','no-store');
-    res.json({conversation:conversation?{id:Number(conversation.id),teacherName:conversation.teacher_name||user.name,updatedAt:String(conversation.updated_at),lastMessageId:conversation.last_message_id==null?null:Number(conversation.last_message_id),lastMessage:conversation.last_message||'',lastMessageAt:conversation.last_message_at?String(conversation.last_message_at):String(conversation.updated_at),lastSenderId:conversation.last_sender_id==null?null:Number(conversation.last_sender_id),lastAdminMessageId:conversation.last_admin_message_id==null?null:Number(conversation.last_admin_message_id),lastAdminMessage:conversation.last_admin_message||'',lastAdminMessageAt:conversation.last_admin_message_at?String(conversation.last_admin_message_at):String(conversation.updated_at)}:null,unreadCount});
+    res.json({conversation:conversation?{id:Number(conversation.id),teacherName:conversation.teacher_name||user.name,updatedAt:toUtcIso(conversation.updated_at),lastMessageId:conversation.last_message_id==null?null:Number(conversation.last_message_id),lastMessage:conversation.last_message||'',lastMessageAt:toUtcIso(conversation.last_message_at || conversation.updated_at),lastSenderId:conversation.last_sender_id==null?null:Number(conversation.last_sender_id),lastAdminMessageId:conversation.last_admin_message_id==null?null:Number(conversation.last_admin_message_id),lastAdminMessage:conversation.last_admin_message||'',lastAdminMessageAt:toUtcIso(conversation.last_admin_message_at || conversation.updated_at)}:null,unreadCount});
   }catch(e){console.error('Chat conversation lookup failed:',e.message);res.status(500).json({message:'Unable to load your conversation.'});}
 });
 
@@ -825,7 +1703,7 @@ app.post('/api/chat/conversation',async(req,res)=>{
     if(normalizeRole(user.role)!=='TEACHER')return res.status(403).json({message:'Only Teachers can start a Teacher-to-Admin conversation.'});
     const conversation=await ensureTeacherConversation(user);
     if(!conversation)return res.status(500).json({message:'Unable to create your conversation.'});
-    res.json({conversation:{id:Number(conversation.id),teacherName:user.name,updatedAt:String(conversation.updated_at)}});
+    res.json({conversation:{id:Number(conversation.id),teacherName:user.name,updatedAt:toUtcIso(conversation.updated_at)}});
   }catch(e){console.error('Chat conversation creation failed:',e.message);res.status(500).json({message:'Unable to start your conversation.'});}
 });
 
@@ -849,7 +1727,7 @@ app.get('/api/chat/inbox',async(req,res)=>{
       ORDER BY COALESCE(last_message_at,c.updated_at) DESC,c.id DESC
     `,[Number(user.id)]);
     res.set('Cache-Control','no-store');
-    res.json({conversations:rows.map(r=>({id:Number(r.id),teacherId:r.teacher_user_id==null?null:Number(r.teacher_user_id),teacherName:r.teacher_name||'Former Teacher account',teacherEmail:r.teacher_email||'',lastMessage:r.last_message||'',lastMessageAt:r.last_message_at?String(r.last_message_at):String(r.updated_at),lastMessageId:r.last_message_id==null?null:Number(r.last_message_id),lastTeacherMessageId:r.last_teacher_message_id==null?null:Number(r.last_teacher_message_id),lastTeacherMessage:r.last_teacher_message||'',lastTeacherMessageAt:r.last_teacher_message_at?String(r.last_teacher_message_at):String(r.updated_at),unreadCount:Number(r.unread_count||0)}))});
+    res.json({conversations:rows.map(r=>({id:Number(r.id),teacherId:r.teacher_user_id==null?null:Number(r.teacher_user_id),teacherName:r.teacher_name||'Former Teacher account',teacherEmail:r.teacher_email||'',lastMessage:r.last_message||'',lastMessageAt:toUtcIso(r.last_message_at || r.updated_at),lastMessageId:r.last_message_id==null?null:Number(r.last_message_id),lastTeacherMessageId:r.last_teacher_message_id==null?null:Number(r.last_teacher_message_id),lastTeacherMessage:r.last_teacher_message||'',lastTeacherMessageAt:toUtcIso(r.last_teacher_message_at || r.updated_at),unreadCount:Number(r.unread_count||0)}))});
   }catch(e){console.error('Chat inbox failed:',e.message);res.status(500).json({message:'Unable to load the Admin inbox.'});}
 });
 
@@ -865,7 +1743,7 @@ app.get('/api/chat/conversations/:id/messages',async(req,res)=>{
       WHERE m.conversation_id=? ORDER BY m.id ASC
     `,[id]);
     res.set('Cache-Control','no-store');
-    res.json({messages:rows.map(m=>({id:Number(m.id),conversationId:Number(m.conversation_id),senderId:m.sender_user_id==null?null:Number(m.sender_user_id),senderName:m.sender_name||'Former account',senderRole:m.sender_role||'FORMER_ACCOUNT',text:m.message_text,createdAt:String(m.created_at)})),unreadCount:await chatUnreadCount(id,user)});
+    res.json({messages:rows.map(m=>({id:Number(m.id),conversationId:Number(m.conversation_id),senderId:m.sender_user_id==null?null:Number(m.sender_user_id),senderName:m.sender_name||'Former account',senderRole:m.sender_role||'FORMER_ACCOUNT',text:m.message_text,createdAt:toUtcIso(m.created_at)})),unreadCount:await chatUnreadCount(id,user)});
   }catch(e){console.error('Chat message retrieval failed:',e.message);res.status(500).json({message:'Unable to load conversation messages.'});}
 });
 
@@ -883,9 +1761,10 @@ app.post('/api/chat/conversations/:id/messages',async(req,res)=>{
     history.recent=history.recent.filter(timestamp=>now-timestamp<60000);
     if(now-history.lastAt<CHAT_SEND_INTERVAL_MS||history.recent.length>=30)return res.status(429).json({message:'Please wait before sending more messages.'});
     history.lastAt=now;history.recent.push(now);chatSendTimes.set(Number(user.id),history);
-    const result=await dbQuery('INSERT INTO orgroom_chat_messages (conversation_id,sender_user_id,message_text) VALUES (?,?,?)',[id,Number(user.id),text]);
-    await dbQuery('UPDATE orgroom_chat_conversations SET updated_at=NOW() WHERE id=?',[id]);
-    const message={id:Number(result.insertId),conversation_id:id,sender_user_id:Number(user.id),message_text:text,created_at:new Date().toISOString(),sender_name:user.name,sender_role:user.role};
+    const result=await dbQuery('INSERT INTO orgroom_chat_messages (conversation_id,sender_user_id,message_text,created_at) VALUES (?,?,?,UTC_TIMESTAMP())',[id,Number(user.id),text]);
+    await dbQuery('UPDATE orgroom_chat_conversations SET updated_at=UTC_TIMESTAMP() WHERE id=?',[id]);
+    const savedMessage=(await dbQuery('SELECT created_at FROM orgroom_chat_messages WHERE id=? LIMIT 1',[result.insertId]))[0];
+    const message={id:Number(result.insertId),conversation_id:id,sender_user_id:Number(user.id),message_text:text,created_at:toUtcIso(savedMessage?.created_at),sender_name:user.name,sender_role:user.role};
     await createChatNotifications(conversation,message,user);
     res.status(201).json({message:{id:message.id,conversationId:id,senderId:Number(user.id),senderName:user.name,senderRole:user.role,text,createdAt:message.created_at}});
   }catch(e){console.error('Chat send failed:',e.message);res.status(500).json({message:'Unable to send your message.'});}
@@ -928,7 +1807,7 @@ app.get('/api/notifications',async(req,res)=>{
     const rows=await dbQuery(`SELECT n.*, r.user_name AS requester_name, r.room_name, r.building, r.reservation_date, r.time_slot FROM notifications n LEFT JOIN reservations r ON r.id=n.reservation_id WHERE n.recipient_user_id=? ORDER BY n.created_at DESC,n.id DESC LIMIT ${limit}`,[user.id]);
     const unreadRows=await dbQuery('SELECT COUNT(*) AS count FROM notifications WHERE recipient_user_id=? AND is_read=0',[user.id]);
     res.set('Cache-Control','no-store');
-    res.json({notifications:rows.map(row=>({id:Number(row.id),type:row.notification_type,reservationId:row.reservation_id==null?null:Number(row.reservation_id),conversationId:String(row.event_key||'').startsWith('chat:')?Number(String(row.event_key).split(':')[1])||null:null,title:row.title,message:row.message,isRead:Boolean(row.is_read),createdAt:String(row.created_at),readAt:row.read_at?String(row.read_at):null,requesterName:row.requester_name||'',roomName:row.room_name||'',building:row.building||'',date:row.reservation_date?String(row.reservation_date).slice(0,10):'',timeSlot:row.time_slot||''})),unreadCount:Number(unreadRows[0]?.count||0)});
+    res.json({notifications:rows.map(row=>({id:Number(row.id),type:row.notification_type,reservationId:row.reservation_id==null?null:Number(row.reservation_id),conversationId:String(row.event_key||'').startsWith('chat:')?Number(String(row.event_key).split(':')[1])||null:null,title:row.title,message:row.message,isRead:Boolean(row.is_read),createdAt:toUtcIso(row.created_at),readAt:toUtcIso(row.read_at),requesterName:row.requester_name||'',roomName:row.room_name||'',building:row.building||'',date:row.reservation_date?String(row.reservation_date).slice(0,10):'',timeSlot:row.time_slot||''})),unreadCount:Number(unreadRows[0]?.count||0)});
   }catch(e){res.status(500).json({message:'Unable to load notifications.'});}
 });
 
@@ -942,25 +1821,27 @@ app.post('/api/notifications/:id/read',async(req,res)=>{
 });
 
 app.get('/api/facilities',async(req,res)=>{try{if(!await requireAuth(req,res))return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const rows=await dbQuery('SELECT * FROM facilities ORDER BY building,name');res.json(rows.map(mapFacility));}catch(e){res.status(500).json({message:'Unable to load facilities.'})}});
-app.get('/api/reservations',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const isAdmin=isAdminRole(user.role);const rows=await dbQuery(`SELECT r.*, f.name AS facility_lookup_name, du.name AS decision_by_name, du.email AS decision_by_email, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms, sr.delivery_status AS start_reminder_status, sr.sent_at AS start_reminder_sent_at, er.delivery_status AS end_reminder_status, er.sent_at AS end_reminder_sent_at FROM reservations r LEFT JOIN facilities f ON f.id=r.facility_id LEFT JOIN users du ON du.id=r.decision_by_user_id LEFT JOIN reservation_reminders sr ON sr.reservation_id=r.id AND sr.reminder_type='START' LEFT JOIN reservation_reminders er ON er.reservation_id=r.id AND er.reminder_type='END' WHERE ?=1 OR r.user_id=? OR (r.user_id IS NULL AND LOWER(r.user_email)=LOWER(?)) ORDER BY r.id DESC`,[isAdmin?1:0,user.id,user.email]);res.json(rows.map(mapReservation));}catch(e){res.status(500).json({message:'Unable to load reservations.'})}});
+app.get('/api/reservations',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const isAdmin=isAdminRole(user.role);const rows=await dbQuery(`SELECT r.*, f.name AS facility_lookup_name, du.name AS decision_by_name, du.email AS decision_by_email, sr.delivery_status AS start_reminder_status, sr.sent_at AS start_reminder_sent_at, er.delivery_status AS end_reminder_status, er.sent_at AS end_reminder_sent_at FROM reservations r LEFT JOIN facilities f ON f.id=r.facility_id LEFT JOIN users du ON du.id=r.decision_by_user_id LEFT JOIN reservation_reminders sr ON sr.reservation_id=r.id AND sr.reminder_type='START' LEFT JOIN reservation_reminders er ON er.reservation_id=r.id AND er.reminder_type='END' WHERE ?=1 OR r.user_id=? OR (r.user_id IS NULL AND LOWER(r.user_email)=LOWER(?)) ORDER BY r.id DESC`,[isAdmin?1:0,user.id,user.email]);res.json(rows.map(mapReservation));}catch(e){res.status(500).json({message:'Unable to load reservations.'})}});
 
 app.get('/api/weekly-room-schedules',async(req,res)=>{try{if(!await requireAuth(req,res))return;res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const rows=await dbQuery(`SELECT * FROM weekly_room_schedules WHERE is_active=1 AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' ORDER BY facility_id,day_of_week,start_time`);res.json(rows.map(mapWeekly));}catch(e){res.status(500).json({message:'Unable to load recurring room schedules.'})}});
 
 
 function buildRoomAvailabilitySegments(weeklyRows, reservationRows){
-  const points=new Set([OPERATING_START_MINUTES,OPERATING_END_MINUTES]);
+  const operatingStart=runtimeSystemSettings.reservationStartMinutes;
+  const operatingEnd=runtimeSystemSettings.reservationEndMinutes;
+  const points=new Set([operatingStart,operatingEnd]);
   const intervals=[];
   for(const row of weeklyRows||[]){
     const start=dbTimeMinutes(row.start_time), end=dbTimeMinutes(row.end_time);
     if(Number.isFinite(start)&&Number.isFinite(end)&&end>start){
-      const a=Math.max(OPERATING_START_MINUTES,start), b=Math.min(OPERATING_END_MINUTES,end);
+      const a=Math.max(operatingStart,start), b=Math.min(operatingEnd,end);
       if(b>a){intervals.push({start:a,end:b,status:'OCCUPIED'});points.add(a);points.add(b);}
     }
   }
   for(const row of reservationRows||[]){
     const [rawStart,rawEnd]=timeSlotParts(row.time_slot);
     if(Number.isFinite(rawStart)&&Number.isFinite(rawEnd)&&rawEnd>rawStart){
-      const a=Math.max(OPERATING_START_MINUTES,rawStart), b=Math.min(OPERATING_END_MINUTES,rawEnd);
+      const a=Math.max(operatingStart,rawStart), b=Math.min(operatingEnd,rawEnd);
       if(b>a){intervals.push({start:a,end:b,status:String(row.status||'').toUpperCase()==='PENDING'?'PENDING':'OCCUPIED'});points.add(a);points.add(b);}
     }
   }
@@ -1041,7 +1922,7 @@ app.get('/api/search',async(req,res)=>{
       const reservations=reservationRows.filter(row=>Number(row.facility_id)===id || (row.facility_id==null && String(row.room_name||'').toLowerCase()===String(facility.name||'').toLowerCase() && String(row.building||'').toLowerCase()===String(facility.building||'').toLowerCase()));
       let availabilityStatus='UNKNOWN';
       if(['MAINTENANCE','INACTIVE','CLOSED','DISABLED','UNAVAILABLE'].includes(String(facility.status||'AVAILABLE').toUpperCase())) availabilityStatus='UNAVAILABLE';
-      else if(Number.isFinite(currentMinute) && currentMinute>=OPERATING_START_MINUTES && currentMinute<OPERATING_END_MINUTES){
+      else if(Number.isFinite(currentMinute) && currentMinute>=runtimeSystemSettings.reservationStartMinutes && currentMinute<runtimeSystemSettings.reservationEndMinutes){
         const segments=buildRoomAvailabilitySegments(schedules,reservations);
         const segment=segments.find(item=>item.start<=currentMinute && currentMinute<item.end);
         availabilityStatus=segment?.status||'UNKNOWN';
@@ -1170,16 +2051,118 @@ app.get('/api/search',async(req,res)=>{
   }
 });
 
-app.get('/api/room-schedule',async(req,res)=>{try{if(!await requireAuth(req,res))return;const facilityId=Number(req.query.facilityId);const date=String(req.query.date||'').trim();if(!Number.isInteger(facilityId)||facilityId<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date))return res.status(400).json({message:'A valid facility and date are required.'});res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const weeklyRows=await dbQuery(`SELECT * FROM weekly_room_schedules WHERE facility_id=? AND is_active=1 AND day_of_week=DAYNAME(?) AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' AND (term_start IS NULL OR term_start<=?) AND (term_end IS NULL OR term_end>=?) ORDER BY start_time`,[facilityId,date,date,date]);const reservationRows=await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.reservation_date=? AND r.status IN ('PENDING','APPROVED') AND (r.facility_id=? OR (r.facility_id IS NULL AND r.room_name=(SELECT name FROM facilities WHERE id=? LIMIT 1) AND r.building=(SELECT building FROM facilities WHERE id=? LIMIT 1))) ORDER BY r.time_slot,r.id`,[date,facilityId,facilityId,facilityId]);const segments=buildRoomAvailabilitySegments(weeklyRows,reservationRows);res.json({date,facilityId,operatingStart:OPERATING_START_MINUTES,operatingEnd:OPERATING_END_MINUTES,segments,weekly:weeklyRows.map(mapWeekly),reservations:reservationRows.map(mapReservation)});}catch(e){res.status(500).json({message:'Unable to load the room schedule.'})}});
+app.get('/api/room-schedule',async(req,res)=>{try{if(!await requireAuth(req,res))return;const facilityId=Number(req.query.facilityId);const date=String(req.query.date||'').trim();if(!Number.isInteger(facilityId)||facilityId<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date))return res.status(400).json({message:'A valid facility and date are required.'});res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');res.set('Pragma','no-cache');const weeklyRows=await dbQuery(`SELECT * FROM weekly_room_schedules WHERE facility_id=? AND is_active=1 AND day_of_week=DAYNAME(?) AND HOUR(start_time)<24 AND HOUR(end_time)<24 AND end_time>start_time AND UPPER(TRIM(activity_name)) NOT IN ('MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY') AND UPPER(TRIM(activity_name)) NOT LIKE 'APPROVED BY:%' AND (term_start IS NULL OR term_start<=?) AND (term_end IS NULL OR term_end>=?) ORDER BY start_time`,[facilityId,date,date,date]);const reservationRows=await dbQuery(`SELECT r.* FROM reservations r WHERE r.reservation_date=? AND r.status IN ('PENDING','APPROVED') AND (r.facility_id=? OR (r.facility_id IS NULL AND r.room_name=(SELECT name FROM facilities WHERE id=? LIMIT 1) AND r.building=(SELECT building FROM facilities WHERE id=? LIMIT 1))) ORDER BY r.time_slot,r.id`,[date,facilityId,facilityId,facilityId]);const segments=buildRoomAvailabilitySegments(weeklyRows,reservationRows);res.json({date,facilityId,operatingStart:runtimeSystemSettings.reservationStartMinutes,operatingEnd:runtimeSystemSettings.reservationEndMinutes,segments,weekly:weeklyRows.map(mapWeekly),reservations:reservationRows.map(mapReservation)});}catch(e){res.status(500).json({message:'Unable to load the room schedule.'})}});
 
-app.post('/api/reservations',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const b=req.body;if(!b.roomName||!b.building||!b.date||!b.timeSlot)return res.status(400).json({message:'Required reservation information is missing.'});const facilityId=Number(b.facilityId)||null;const facility=facilityId?(await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1',[facilityId]))[0]:null;validateReservationInput({facility,facilityId,roomName:b.roomName,building:b.building,date:b.date,timeSlot:b.timeSlot,attendees:b.attendees,purpose:b.purpose});const key=`${facilityId}|${b.date}`;const created=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);await assertNoConflict({facilityId,roomName:facility.name,building:facility.building,date:b.date,timeSlot:b.timeSlot,query});const result=await query(`INSERT INTO reservations (user_id,user_name,user_email,user_role,organization_name,facility_id,room_name,building,reservation_date,time_slot,attendees,purpose,event_type,status,admin_notes,priority) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING','',?)`,[user.id,user.name,user.email,String(user.role||'teacher').toLowerCase(),b.orgName||user.organization||'',facility.id,facility.name,facility.building,b.date,b.timeSlot,Number(b.attendees),String(b.purpose||'').trim().slice(0,500),String(b.eventType||'Academic Lecture').slice(0,100),Boolean(user.role==='teacher'||b.priority)?1:0]);const rows=await query(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[result.insertId]);return mapReservation(rows[0]);});await notifyReservationEvent(created.dbId,'NEW_RESERVATION_REQUEST');res.status(201).json(created);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to create reservation.'})}});
+app.post('/api/reservations', async (req, res) => {
+  try {
+    const user = await requireAuth(req, res);
+    if (!user) return;
+    const body = req.body || {};
+    if (!body.roomName || !body.building || !body.date || !body.timeSlot) {
+      return res.status(400).json({ message: 'Required reservation information is missing.' });
+    }
 
-app.get('/api/server-time',async(req,res)=>{try{if(!await requireAuth(req,res))return;const row=(await dbQuery('SELECT UNIX_TIMESTAMP(NOW()) * 1000 AS server_now_ms'))[0];res.set('Cache-Control','no-store');res.json({serverNowMs:Number(row.server_now_ms)});}catch(e){res.status(500).json({message:'Unable to read server time.'})}});
+    const facilityId = Number(body.facilityId) || null;
+    const facility = facilityId
+      ? (await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1', [facilityId]))[0]
+      : null;
+    validateReservationInput({
+      facility,
+      facilityId,
+      roomName: body.roomName,
+      building: body.building,
+      date: body.date,
+      timeSlot: body.timeSlot,
+      attendees: body.attendees,
+      purpose: body.purpose
+    });
 
-function reminderDateTimeSql(which){
-  const expression=which==='START' ? `STR_TO_DATE(CONCAT(reservation_date,' ',SUBSTRING_INDEX(time_slot,' - ',1)),'%Y-%m-%d %h:%i %p')` : `STR_TO_DATE(CONCAT(reservation_date,' ',SUBSTRING_INDEX(time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p')`;
-  return expression;
-}
+    const requesterRole = normalizeRole(user.role);
+    const autoApproved = requesterRole === 'SUPER_ADMIN';
+    const initialStatus = autoApproved ? 'APPROVED' : 'PENDING';
+    const decisionSource = autoApproved ? 'SYSTEM_AUTO_APPROVAL' : 'AWAITING_APPROVAL';
+    const key = `${facilityId}|${body.date}`;
+
+    const created = await withReservationLock(key, async connection => {
+      const query = async (sql, params = []) => {
+        const [rows] = await connection.query(sql, params);
+        return rows;
+      };
+      await assertNoConflict({
+        facilityId,
+        roomName: facility.name,
+        building: facility.building,
+        date: body.date,
+        timeSlot: body.timeSlot,
+        query
+      });
+
+      const result = await query(
+        `INSERT INTO reservations
+          (user_id,user_name,user_email,user_role,organization_name,facility_id,room_name,building,
+           reservation_date,time_slot,attendees,purpose,event_type,status,admin_notes,
+           decision_by_user_id,decision_at,decision_source,priority)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,${autoApproved ? 'NOW()' : 'NULL'},?,?)`,
+        [
+          Number(user.id), user.name, user.email, requesterRole.toLowerCase(),
+          body.orgName || user.organization || '', facility.id, facility.name, facility.building,
+          body.date, body.timeSlot, Number(body.attendees),
+          String(body.purpose || '').trim().slice(0, 500),
+          String(body.eventType || 'Academic Lecture').slice(0, 100),
+          initialStatus, '', decisionSource,
+          requesterRole === 'TEACHER' || Boolean(body.priority) ? 1 : 0
+        ]
+      );
+
+      const rows = await query('SELECT * FROM reservations WHERE id=?', [result.insertId]);
+      const mapped = mapReservation(rows[0]);
+
+      await writeAuditEvent({
+        actor: user,
+        action: autoApproved ? 'RESERVATION_AUTO_APPROVED' : 'RESERVATION_SUBMITTED',
+        entityType: 'RESERVATION',
+        entityId: result.insertId,
+        newValues: {
+          status: initialStatus,
+          decisionSource,
+          requesterRole,
+          facilityId: facility.id,
+          roomName: facility.name,
+          building: facility.building,
+          date: body.date,
+          timeSlot: body.timeSlot,
+          attendees: Number(body.attendees),
+          purpose: String(body.purpose || '').trim().slice(0, 500)
+        }
+      }, query);
+
+      if (autoApproved) {
+        await writeReservationDecisionHistory({
+          reservationId: result.insertId,
+          fromStatus: null,
+          toStatus: 'APPROVED',
+          actionType: 'SYSTEM_AUTO_APPROVAL',
+          actorRole: 'SYSTEM',
+          reason: 'Automatically approved after all standard room, schedule, capacity, time-window, and conflict validations passed.'
+        }, query);
+      }
+
+      return mapped;
+    });
+
+    await notifyReservationEvent(
+      created.dbId,
+      autoApproved ? 'RESERVATION_APPROVED' : 'NEW_RESERVATION_REQUEST'
+    );
+    res.status(201).json(created);
+  } catch (error) {
+    res.status(error.status || 409).json({
+      message: error.message || 'Unable to create reservation.'
+    });
+  }
+});
+
+app.get('/api/server-time',async(req,res)=>{try{if(!await requireAuth(req,res))return;const row=(await dbQuery('SELECT UNIX_TIMESTAMP(UTC_TIMESTAMP()) * 1000 AS server_now_ms'))[0];res.set('Cache-Control','no-store');res.json({serverNowMs:Number(row.server_now_ms)});}catch(e){res.status(500).json({message:'Unable to read server time.'})}});
 
 async function sendReservationReminder(row,type){
   const isStart=type==='START';
@@ -1213,18 +2196,18 @@ async function processReservationReminders(){
   if(reminderJobRunning) return;
   reminderJobRunning=true;
   try{
+    const today=manilaTodayISO();
     const rows=await dbQuery(`SELECT r.*, u.email AS recipient_email, u.name AS verified_user_name,
       LOWER(COALESCE(u.role,'')) AS recipient_role,
-      UNIX_TIMESTAMP(NOW())*1000 AS server_now_ms,
-      UNIX_TIMESTAMP(${reminderDateTimeSql('START')})*1000 AS start_ms,
-      UNIX_TIMESTAMP(${reminderDateTimeSql('END')})*1000 AS end_ms
+      UNIX_TIMESTAMP(UTC_TIMESTAMP())*1000 AS server_now_ms
       FROM reservations r
       INNER JOIN users u ON u.id=r.user_id AND u.is_verified=1
       WHERE r.status='APPROVED'
         AND LOWER(COALESCE(u.role,''))='teacher'
-        AND r.reservation_date BETWEEN DATE_SUB(DATE(NOW()),INTERVAL 7 DAY) AND DATE_ADD(DATE(NOW()),INTERVAL 7 DAY)`);
+        AND r.reservation_date BETWEEN DATE_SUB(?,INTERVAL 7 DAY) AND DATE_ADD(?,INTERVAL 7 DAY)`,[today,today]);
     for(const row of rows){
-      const now=Number(row.server_now_ms), start=Number(row.start_ms), end=Number(row.end_ms);
+      const now=Number(row.server_now_ms);
+      const [start,end]=reservationTimeRange(row.reservation_date,row.time_slot);
       if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start) continue;
 
       // Preserve the existing 15-minute email reminders.
@@ -1297,7 +2280,7 @@ app.get('/api/room-usage',async(req,res)=>{
     const date=String(req.query.date||'').slice(0,10);
     if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({message:'A valid date is required.'});
     const rows=await dbQuery(`SELECT r.id AS reservation_id,r.user_name,r.user_email,r.user_role,r.organization_name,r.room_name,r.building,r.facility_id,r.reservation_date,r.time_slot,r.attendees,r.purpose,r.event_type,r.status AS reservation_status,r.submitted_at,u.id AS usage_id,u.usage_status,u.checked_at,u.note AS usage_note,u.created_at AS usage_created_at,u.updated_at AS usage_updated_at,cu.name AS checked_by_name,cu.email AS checked_by_email FROM reservations r LEFT JOIN room_usage_checks u ON u.reservation_id=r.id LEFT JOIN users cu ON cu.id=u.checked_by_user_id WHERE r.reservation_date=? AND r.status='APPROVED' ORDER BY r.building,r.room_name,r.time_slot,r.id`,[date]);
-    res.json(rows.map(row=>({reservation:{id:`OR-${String(row.reservation_id).padStart(3,'0')}`,dbId:Number(row.reservation_id),userName:row.user_name,userEmail:row.user_email,userRole:row.user_role,orgName:row.organization_name,roomName:row.room_name,building:row.building,facilityId:row.facility_id,date:String(row.reservation_date).slice(0,10),timeSlot:row.time_slot,attendees:Number(row.attendees),purpose:row.purpose,eventType:row.event_type,status:row.reservation_status,submittedAt:String(row.submitted_at)},usage:row.usage_id?mapUsageCheck(row):{id:null,reservationId:Number(row.reservation_id),status:'NOT_CHECKED',checkedAt:null,checkedBy:'',checkedByEmail:'',note:'',createdAt:null,updatedAt:null}})));
+    res.json(rows.map(row=>({reservation:{id:`OR-${String(row.reservation_id).padStart(3,'0')}`,dbId:Number(row.reservation_id),userName:row.user_name,userEmail:row.user_email,userRole:row.user_role,orgName:row.organization_name,roomName:row.room_name,building:row.building,facilityId:row.facility_id,date:String(row.reservation_date).slice(0,10),timeSlot:row.time_slot,attendees:Number(row.attendees),purpose:row.purpose,eventType:row.event_type,status:row.reservation_status,submittedAt:toUtcIso(row.submitted_at) || ''},usage:row.usage_id?mapUsageCheck(row):{id:null,reservationId:Number(row.reservation_id),status:'NOT_CHECKED',checkedAt:null,checkedBy:'',checkedByEmail:'',note:'',createdAt:null,updatedAt:null}})));
   }catch(e){res.status(500).json({message:'Unable to load room usage checks.'});}
 });
 
@@ -1314,14 +2297,114 @@ app.put('/api/room-usage/:reservationId',async(req,res)=>{
     const checkedAt=status==='NOT_CHECKED'?null:new Date();
     await dbQuery(`INSERT INTO room_usage_checks (reservation_id,checked_by_user_id,usage_status,checked_at,note) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE checked_by_user_id=VALUES(checked_by_user_id),usage_status=VALUES(usage_status),checked_at=VALUES(checked_at),note=VALUES(note)`,[reservationId,checkerId,status,checkedAt,note]);
     const row=(await dbQuery(`SELECT u.*,cu.name AS checked_by_name,cu.email AS checked_by_email FROM room_usage_checks u LEFT JOIN users cu ON cu.id=u.checked_by_user_id WHERE u.reservation_id=?`,[reservationId]))[0];
+    await writeAuditEvent({actor:admin,action:'ROOM_USAGE_CHECK_UPDATED',entityType:'RESERVATION',entityId:reservationId,newValues:{usageStatus:status,note}});
     res.json(mapUsageCheck(row));
   }catch(e){res.status(500).json({message:'Unable to save room usage check.'});}
 });
 
-app.post('/api/reservations/:id/decision',async(req,res)=>{try{const admin=await requireAdminAuth(req,res);if(!admin)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const decision=String(req.body.status||'').toUpperCase();if(!['APPROVED','REJECTED'].includes(decision))return res.status(400).json({message:'A valid approval decision is required.'});const note=String(req.body.adminNotes||'').slice(0,2000);const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});if(current.status!=='PENDING')return res.status(409).json({message:'This reservation request has already been reviewed.'});if(userOwnsReservation(admin,current))return res.status(403).json({message:'You cannot approve your own reservation request.'});const facilityId=Number(current.facility_id)||null;const key=`${facilityId||current.building+'|'+current.room_name}|${String(current.reservation_date).slice(0,10)}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);const lockedRows=await query('SELECT * FROM reservations WHERE id=? FOR UPDATE',[id]);const locked=lockedRows[0];if(!locked)return null;if(locked.status!=='PENDING')throw Object.assign(new Error('This reservation request has already been reviewed.'),{status:409});if(userOwnsReservation(admin,locked))throw Object.assign(new Error('You cannot approve your own reservation request.'),{status:403});if(decision==='APPROVED')await assertNoConflict({facilityId:Number(locked.facility_id)||null,roomName:locked.room_name,building:locked.building,date:String(locked.reservation_date).slice(0,10),timeSlot:locked.time_slot,excludeId:id,query});await query('UPDATE reservations SET status=?,admin_notes=?,decision_by_user_id=?,decision_at=NOW() WHERE id=?',[decision,note||locked.admin_notes||'',admin.id,id]);const rows=await query(`SELECT r.*, du.name AS decision_by_name, du.email AS decision_by_email, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r LEFT JOIN users du ON du.id=r.decision_by_user_id WHERE r.id=?`,[id]);return mapReservation(rows[0]);});if(!updated)return res.status(404).json({message:'Reservation not found.'});await notifyReservationEvent(updated.dbId,decision==='APPROVED'?'RESERVATION_APPROVED':'RESERVATION_REJECTED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to review reservation.'})}});
+app.post('/api/reservations/:id/decision', async (req, res) => {
+  try {
+    const admin = await requireAdminAuth(req, res);
+    if (!admin) return;
+    const id = Number(String(req.params.id).replace(/^OR-/i, ''));
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ message: 'Invalid reservation reference.' });
+    }
+    const decision = String(req.body.status || '').toUpperCase();
+    if (!['APPROVED', 'REJECTED'].includes(decision)) {
+      return res.status(400).json({ message: 'A valid approval decision is required.' });
+    }
+    const note = String(req.body.adminNotes || '').trim().slice(0, 2000);
+    const current = (await dbQuery('SELECT * FROM reservations WHERE id=?', [id]))[0];
+    if (!current) return res.status(404).json({ message: 'Reservation not found.' });
+    if (current.status !== 'PENDING') {
+      return res.status(409).json({ message: 'This reservation request has already been reviewed.' });
+    }
+    if (userOwnsReservation(admin, current)) {
+      return res.status(403).json({ message: 'You cannot approve your own reservation request.' });
+    }
 
-app.put('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to modify this reservation.'});const requestedStatus=normalizeStatus(req.body.status||current.status);if(isAdmin&&requestedStatus!==current.status)return res.status(403).json({message:'Use the reservation review action to approve or reject a pending request.'});if(!isAdmin&&(current.status!=='PENDING'||requestedStatus!=='PENDING'))return res.status(403).json({message:'Only your pending reservation requests can be edited.'});if(!isAdmin && (req.body.userId||req.body.userEmail||req.body.userName)) return res.status(403).json({message:'Reservation ownership cannot be changed.'});const b={...mapReservation(current),...req.body};const facilityId=Number(b.facilityId||current.facility_id)||null;const facility=facilityId?(await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1',[facilityId]))[0]:null;validateReservationInput({facility,facilityId,roomName:b.roomName,building:b.building,date:b.date,timeSlot:b.timeSlot,attendees:b.attendees,purpose:b.purpose});const key=`${facilityId}|${b.date}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);if(requestedStatus==='PENDING'||requestedStatus==='APPROVED')await assertNoConflict({facilityId,roomName:facility.name,building:facility.building,date:b.date,timeSlot:b.timeSlot,excludeId:id,query});await query(`UPDATE reservations SET room_name=?,building=?,facility_id=?,reservation_date=?,time_slot=?,attendees=?,purpose=?,event_type=?,status=?,admin_notes=?,priority=? WHERE id=?`,[facility.name,facility.building,facility.id,b.date,b.timeSlot,Number(b.attendees),String(b.purpose||'').trim().slice(0,500),String(b.eventType||'').slice(0,100),requestedStatus,isAdmin?String(b.adminNotes||'').slice(0,2000):current.admin_notes||'',isAdmin&&Boolean(b.priority)?1:current.priority?1:0,id]);const rows=await query(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]);return mapReservation(rows[0]);});if(!isAdmin && current.status==='PENDING' && (String(current.room_name)!==String(b.roomName)||String(current.building)!==String(b.building)||String(current.reservation_date).slice(0,10)!==String(b.date)||String(current.time_slot)!==String(b.timeSlot)||String(current.purpose)!==String(b.purpose||'')||String(current.event_type)!==String(b.eventType||'')||Number(current.attendees)!==Number(b.attendees)||Boolean(current.priority)!==Boolean(b.priority))) await notifyReservationEvent(updated.dbId,'RESERVATION_MODIFIED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to update reservation.'})}});
-app.delete('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to cancel this reservation.'});if(current.status==='REJECTED'||current.status==='CANCELLED')return res.status(409).json({message:'This reservation is already closed.'});if(!isAdmin&& !['PENDING','APPROVED'].includes(current.status))return res.status(403).json({message:'Only your pending or approved reservation can be cancelled.'});await dbQuery("UPDATE reservations SET status='CANCELLED',decision_by_user_id=?,decision_at=NOW(),admin_notes=CASE WHEN admin_notes IS NULL OR admin_notes='' THEN 'Cancelled by requester.' ELSE admin_notes END WHERE id=?",[user.id,id]);await notifyReservationEvent(id,'RESERVATION_CANCELLED');const row=(await dbQuery(`SELECT r.*, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',1)),'%Y-%m-%d %h:%i %p'))*1000 AS start_ms, UNIX_TIMESTAMP(STR_TO_DATE(CONCAT(r.reservation_date,' ',SUBSTRING_INDEX(r.time_slot,' - ',-1)),'%Y-%m-%d %h:%i %p'))*1000 AS end_ms FROM reservations r WHERE r.id=?`,[id]))[0];res.json(mapReservation(row));}catch(e){res.status(e.status||500).json({message:e.message||'Unable to cancel reservation.'})}});
+    const requesterRole = normalizeRole(current.user_role);
+    if (requesterRole === 'SUPER_ADMIN') {
+      return res.status(403).json({ message: 'Super Admin reservations are automatically approved. Use the Super Admin override workflow only for an exceptional correction.' });
+    }
+    if (requesterRole === 'ADMIN' && !isSuperAdminRole(admin.role)) {
+      return res.status(403).json({ message: 'Only a Super Admin can approve or reject reservations submitted by a regular Admin.' });
+    }
+
+    const facilityId = Number(current.facility_id) || null;
+    const lockKey = `${facilityId || `${current.building}|${current.room_name}`}|${String(current.reservation_date).slice(0, 10)}`;
+    const updated = await withReservationLock(lockKey, async connection => {
+      const query = async (sql, params = []) => {
+        const [rows] = await connection.query(sql, params);
+        return rows;
+      };
+      const locked = (await query('SELECT * FROM reservations WHERE id=? FOR UPDATE', [id]))[0];
+      if (!locked) return null;
+      if (locked.status !== 'PENDING') {
+        throw Object.assign(new Error('This reservation request has already been reviewed.'), { status: 409 });
+      }
+      if (userOwnsReservation(admin, locked)) {
+        throw Object.assign(new Error('You cannot approve your own reservation request.'), { status: 403 });
+      }
+      const lockedRequesterRole = normalizeRole(locked.user_role);
+      if (lockedRequesterRole === 'SUPER_ADMIN') {
+        throw Object.assign(new Error('Super Admin reservations use the automatic approval workflow.'), { status: 403 });
+      }
+      if (lockedRequesterRole === 'ADMIN' && !isSuperAdminRole(admin.role)) {
+        throw Object.assign(new Error('Only a Super Admin can review a regular Admin reservation.'), { status: 403 });
+      }
+      if (decision === 'APPROVED') {
+        await assertNoConflict({
+          facilityId: Number(locked.facility_id) || null,
+          roomName: locked.room_name,
+          building: locked.building,
+          date: String(locked.reservation_date).slice(0, 10),
+          timeSlot: locked.time_slot,
+          excludeId: id,
+          query
+        });
+      }
+
+      const source = isSuperAdminRole(admin.role) ? 'SUPER_ADMIN_DECISION' : 'ADMIN_DECISION';
+      await query(
+        'UPDATE reservations SET status=?,admin_notes=?,decision_by_user_id=?,decision_at=NOW(),decision_source=? WHERE id=?',
+        [decision, note || (decision === 'APPROVED' ? 'Reservation approved.' : 'Reservation request rejected.'), admin.id, source, id]
+      );
+      await writeReservationDecisionHistory({
+        reservationId: id,
+        fromStatus: locked.status,
+        toStatus: decision,
+        actionType: 'STANDARD_DECISION',
+        actor: admin,
+        reason: note
+      }, query);
+      await writeAuditEvent({
+        actor: admin,
+        action: decision === 'APPROVED' ? 'RESERVATION_APPROVED' : 'RESERVATION_REJECTED',
+        entityType: 'RESERVATION',
+        entityId: id,
+        previousValues: { status: locked.status },
+        newValues: { status: decision, decisionSource: source, adminNotes: note },
+        reason: note
+      }, query);
+      const rows = await query(
+        `SELECT r.*, du.name AS decision_by_name, du.email AS decision_by_email
+         FROM reservations r LEFT JOIN users du ON du.id=r.decision_by_user_id WHERE r.id=?`,
+        [id]
+      );
+      return mapReservation(rows[0]);
+    });
+    if (!updated) return res.status(404).json({ message: 'Reservation not found.' });
+    await notifyReservationEvent(updated.dbId, decision === 'APPROVED' ? 'RESERVATION_APPROVED' : 'RESERVATION_REJECTED');
+    res.json(updated);
+  } catch (error) {
+    res.status(error.status || 409).json({ message: error.message || 'Unable to review reservation.' });
+  }
+});
+
+app.put('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));if(!Number.isInteger(id)||id<=0)return res.status(400).json({message:'Invalid reservation reference.'});const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);const requesterRole=normalizeRole(current.user_role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to modify this reservation.'});if(isAdmin&&!isSuperAdminRole(user.role)&&requesterRole!=='TEACHER'&&!userOwnsReservation(user,current))return res.status(403).json({message:'Regular Admins can manage Teacher reservations and their own requests only.'});if(isAdmin&&!isSuperAdminRole(user.role)&&requesterRole==='SUPER_ADMIN')return res.status(403).json({message:'Regular Admins cannot modify Super Admin reservations.'});const requestedStatus=normalizeStatus(req.body.status||current.status);if(isAdmin&&requestedStatus!==current.status)return res.status(403).json({message:'Use the reservation review action to approve or reject a pending request.'});if(!isAdmin&&(current.status!=='PENDING'||requestedStatus!=='PENDING'))return res.status(403).json({message:'Only your pending reservation requests can be edited.'});if(!isAdmin && (req.body.userId||req.body.userEmail||req.body.userName)) return res.status(403).json({message:'Reservation ownership cannot be changed.'});const b={...mapReservation(current),...req.body};const facilityId=Number(b.facilityId||current.facility_id)||null;const facility=facilityId?(await dbQuery('SELECT * FROM facilities WHERE id=? LIMIT 1',[facilityId]))[0]:null;validateReservationInput({facility,facilityId,roomName:b.roomName,building:b.building,date:b.date,timeSlot:b.timeSlot,attendees:b.attendees,purpose:b.purpose});const key=`${facilityId}|${b.date}`;const updated=await withReservationLock(key,async connection=>{const query=(sql,params=[])=>connection.query(sql,params).then(([rows])=>rows);if(requestedStatus==='PENDING'||requestedStatus==='APPROVED')await assertNoConflict({facilityId,roomName:facility.name,building:facility.building,date:b.date,timeSlot:b.timeSlot,excludeId:id,query});await query(`UPDATE reservations SET room_name=?,building=?,facility_id=?,reservation_date=?,time_slot=?,attendees=?,purpose=?,event_type=?,status=?,admin_notes=?,priority=? WHERE id=?`,[facility.name,facility.building,facility.id,b.date,b.timeSlot,Number(b.attendees),String(b.purpose||'').trim().slice(0,500),String(b.eventType||'').slice(0,100),requestedStatus,isAdmin?String(b.adminNotes||'').slice(0,2000):current.admin_notes||'',isAdmin&&Boolean(b.priority)?1:current.priority?1:0,id]);const rows=await query(`SELECT r.* FROM reservations r WHERE r.id=?`,[id]);const mapped=mapReservation(rows[0]);await writeAuditEvent({actor:user,action:'RESERVATION_UPDATED',entityType:'RESERVATION',entityId:id,previousValues:{roomName:current.room_name,building:current.building,date:String(current.reservation_date).slice(0,10),timeSlot:current.time_slot,attendees:Number(current.attendees),purpose:current.purpose,eventType:current.event_type},newValues:{roomName:mapped.roomName,building:mapped.building,date:mapped.date,timeSlot:mapped.timeSlot,attendees:mapped.attendees,purpose:mapped.purpose,eventType:mapped.eventType}},query);return mapped;});if(!isAdmin && current.status==='PENDING' && (String(current.room_name)!==String(b.roomName)||String(current.building)!==String(b.building)||String(current.reservation_date).slice(0,10)!==String(b.date)||String(current.time_slot)!==String(b.timeSlot)||String(current.purpose)!==String(b.purpose||'')||String(current.event_type)!==String(b.eventType||'')||Number(current.attendees)!==Number(b.attendees)||Boolean(current.priority)!==Boolean(b.priority))) await notifyReservationEvent(updated.dbId,'RESERVATION_MODIFIED');res.json(updated);}catch(e){res.status(e.status||409).json({message:e.message||'Unable to update reservation.'})}});
+app.delete('/api/reservations/:id',async(req,res)=>{try{const user=await requireAuth(req,res);if(!user)return;const id=Number(String(req.params.id).replace(/^OR-/i,''));const current=(await dbQuery('SELECT * FROM reservations WHERE id=?',[id]))[0];if(!current)return res.status(404).json({message:'Reservation not found.'});const isAdmin=isAdminRole(user.role);const requesterRole=normalizeRole(current.user_role);if(!isAdmin&&!userOwnsReservation(user,current))return res.status(403).json({message:'You are not allowed to cancel this reservation.'});if(isAdmin&&!isSuperAdminRole(user.role)&&requesterRole!=='TEACHER'&&!userOwnsReservation(user,current))return res.status(403).json({message:'Regular Admins can cancel Teacher reservations and their own requests only.'});if(isSuperAdminRole(user.role)&&!userOwnsReservation(user,current))return res.status(403).json({message:'Use the Super Admin override workflow to cancel another user’s reservation with an auditable reason.'});if(current.status==='REJECTED'||current.status==='CANCELLED')return res.status(409).json({message:'This reservation is already closed.'});if(!isAdmin&& !['PENDING','APPROVED'].includes(current.status))return res.status(403).json({message:'Only your pending or approved reservation can be cancelled.'});await dbQuery("UPDATE reservations SET status='CANCELLED',decision_by_user_id=?,decision_at=NOW(),decision_source='REQUESTER_CANCELLATION',admin_notes=CASE WHEN admin_notes IS NULL OR admin_notes='' THEN 'Cancelled by requester.' ELSE admin_notes END WHERE id=?",[user.id,id]);await writeReservationDecisionHistory({reservationId:id,fromStatus:current.status,toStatus:'CANCELLED',actionType:'REQUESTER_CANCELLATION',actor:user,reason:'Cancelled through the existing reservation cancellation action.'});await writeAuditEvent({actor:user,action:'RESERVATION_CANCELLED',entityType:'RESERVATION',entityId:id,previousValues:{status:current.status},newValues:{status:'CANCELLED'}});await notifyReservationEvent(id,'RESERVATION_CANCELLED');const row=(await dbQuery(`SELECT r.* FROM reservations r WHERE r.id=?`,[id]))[0];res.json(mapReservation(row));}catch(e){res.status(e.status||500).json({message:e.message||'Unable to cancel reservation.'})}});
 
 async function retryFailedNotificationEmails(){
 if (!emailGatewayUrl || !emailGatewayKey) return;
@@ -1334,13 +2417,14 @@ if (!emailGatewayUrl || !emailGatewayKey) return;
       WHERE d.delivery_status='FAILED' AND d.updated_at < DATE_SUB(NOW(),INTERVAL 30 SECOND)
       ORDER BY d.updated_at LIMIT 10`);
     for(const row of rows){
-      const details=row.reservation_id ? {...reservationNotificationDetails(row),recipientName:row.recipient_name,isAdmin:row.notification_type==='NEW_RESERVATION_REQUEST'||row.notification_type==='RESERVATION_CANCELLED'||row.notification_type==='RESERVATION_MODIFIED'} : {recipientName:row.recipient_name,isAdmin:false,reservationId:null};
+      const details=row.reservation_id ? {...reservationNotificationDetails(row),recipientName:row.recipient_name,isAdmin:row.notification_type==='NEW_RESERVATION_REQUEST'||row.notification_type==='RESERVATION_CANCELLED'||row.notification_type==='RESERVATION_MODIFIED'||row.notification_type==='RESERVATION_OVERRIDDEN'} : {recipientName:row.recipient_name,isAdmin:false,reservationId:null};
       await sendNotificationEmail(Number(row.notification_id),row.recipient_email,row.notification_type,details);
     }
   }catch(e){console.error(`ORGROOM notification retry failed: ${e.message||e}`);}
 }
 
 await ensureDatabase();
+await refreshRuntimeSystemSettings();
 setInterval(processReservationReminders,30000);
 setInterval(retryFailedNotificationEmails,60000);
 processReservationReminders();

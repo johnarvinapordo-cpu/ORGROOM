@@ -1,21 +1,39 @@
 import mysql from 'mysql2/promise';
+import { MAX_ACCOUNT_CAPACITY } from './account-config.js';
+import { RESERVATION_WINDOW_START_MINUTES, RESERVATION_WINDOW_END_MINUTES } from '../shared/reservation-window.js';
+
+const databaseHost = process.env.DB_HOST || '127.0.0.1';
+const isLocalDatabase = /^(localhost|127\.0\.0\.1|::1)$/i.test(databaseHost);
+const databaseSsl = !isLocalDatabase && process.env.DB_SSL_CA?.trim()
+  ? {
+      ca: process.env.DB_SSL_CA,
+      rejectUnauthorized: true
+    }
+  : undefined;
 
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
+  host: databaseHost,
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'orgroom_db',
-  ...(process.env.DB_HOST && {
-    ssl: {
-      ca: process.env.DB_SSL_CA || undefined,
-      rejectUnauthorized: true
-    }
-  }),
+  // MySQL date parsing/formatting stays deterministic; DATETIME values are UTC.
+  timezone: 'Z',
+  ...(databaseSsl ? { ssl: databaseSsl } : {}),
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
   dateStrings: true
+});
+
+// Aiven/Render and local MySQL sessions must store and evaluate metadata
+// timestamps in UTC. Queue this as the first statement on each new connection.
+pool.on('connection', connection => {
+  connection.query("SET SESSION time_zone = '+00:00'", error => {
+    if (error) {
+      console.error(`ORGROOM could not set MySQL session time zone to UTC: ${error.message || error}`);
+    }
+  });
 });
 
 // Compatible with MySQL versions that do not support
@@ -293,6 +311,18 @@ export async function ensureDatabase() {
   );
 
   await addColumnIfMissing(
+    'reservations',
+    'decision_source',
+    "VARCHAR(40) NOT NULL DEFAULT 'MANUAL' AFTER decision_at"
+  );
+
+  await addColumnIfMissing(
+    'facilities',
+    'image_url',
+    'VARCHAR(1000) NULL AFTER description'
+  );
+
+  await addColumnIfMissing(
     'verification_codes',
     'attempts',
     'INT NOT NULL DEFAULT 0 AFTER created_at'
@@ -350,6 +380,69 @@ export async function ensureDatabase() {
       ON DELETE SET NULL
     `);
   }
+
+  // Additive authority/audit tables. Existing account, reservation, message,
+  // and schedule rows are never rewritten by these table creations.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_system_settings (
+      setting_key VARCHAR(80) PRIMARY KEY,
+      setting_value VARCHAR(255) NOT NULL,
+      updated_by_user_id INT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_orgroom_settings_updated (updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(
+    `INSERT IGNORE INTO orgroom_system_settings (setting_key, setting_value) VALUES
+      ('max_accounts', ?),
+      ('reservation_start_minutes', ?),
+      ('reservation_end_minutes', ?)`,
+    [String(MAX_ACCOUNT_CAPACITY), String(RESERVATION_WINDOW_START_MINUTES), String(RESERVATION_WINDOW_END_MINUTES)]
+  );
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orgroom_audit_logs (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      actor_user_id INT NULL,
+      actor_name VARCHAR(255) NOT NULL DEFAULT 'System',
+      actor_email VARCHAR(255) NOT NULL DEFAULT '',
+      actor_role VARCHAR(30) NOT NULL DEFAULT 'SYSTEM',
+      action VARCHAR(100) NOT NULL,
+      entity_type VARCHAR(60) NOT NULL,
+      entity_id VARCHAR(100) NOT NULL DEFAULT '',
+      previous_values LONGTEXT NULL,
+      new_values LONGTEXT NULL,
+      reason VARCHAR(2000) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_orgroom_audit_created (created_at),
+      INDEX idx_orgroom_audit_actor (actor_user_id, created_at),
+      INDEX idx_orgroom_audit_entity (entity_type, entity_id, created_at),
+      CONSTRAINT fk_orgroom_audit_actor FOREIGN KEY (actor_user_id)
+        REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reservation_decision_history (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      reservation_id INT NOT NULL,
+      from_status VARCHAR(30) NULL,
+      to_status VARCHAR(30) NOT NULL,
+      action_type VARCHAR(50) NOT NULL,
+      actor_user_id INT NULL,
+      actor_name VARCHAR(255) NOT NULL DEFAULT 'System',
+      actor_role VARCHAR(30) NOT NULL DEFAULT 'SYSTEM',
+      reason VARCHAR(2000) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_reservation_history_reservation (reservation_id, created_at),
+      INDEX idx_reservation_history_actor (actor_user_id, created_at),
+      CONSTRAINT fk_reservation_history_reservation FOREIGN KEY (reservation_id)
+        REFERENCES reservations(id) ON DELETE RESTRICT,
+      CONSTRAINT fk_reservation_history_actor FOREIGN KEY (actor_user_id)
+        REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 export async function dbQuery(sql, params = []) {
