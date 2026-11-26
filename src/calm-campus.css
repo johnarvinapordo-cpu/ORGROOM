@@ -2750,3 +2750,986 @@ html:not(.dark-mode) .app-shell .workspace {
   .app-shell .admin-action-card, .app-shell .panel, .app-shell .stat-card,
   .app-shell .admin-stat-card, .app-shell .room-card { transition: none !important; }
 }
+
+
+
+/* =========================================================
+   ORGROOM RESPONSIVE REFINEMENT
+   Focus: balanced tablet rail, compact mobile header/navigation,
+   reliable page overflow handling, responsive dialogs and theme
+   surfaces. Desktop layout remains unchanged.
+   ========================================================= */
+
+/* Shared layout safety at all sizes */
+#root,
+.app-shell,
+.app-shell .main,
+.app-shell .orgroom-page-transition,
+.app-shell .page {
+  min-width: 0;
+}
+
+.app-shell .main,
+.app-shell .orgroom-page-transition,
+.app-shell .page,
+.app-shell .page > * {
+  max-width: 100%;
+}
+
+.app-shell :where(.panel, .stat-card, .quick-card, .room-card, .request-card,
+  .admin-panel, .admin-stat-card, .admin-action-card, .sa-panel, .sa-metric,
+  .calendar-facility-section, .monthly-calendar-card, .reservation-status-card) {
+  min-width: 0;
+}
+
+.app-shell :where(img, video, canvas, iframe) {
+  max-width: 100%;
+}
+
+.app-shell :where(.room-photo, .room-image, .facility-image, .reservation-room-photo) img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Keep long identifiers and user-entered text inside their own surfaces. */
+.app-shell :where(.panel, .card, .request-card, .admin-panel, .sa-panel,
+  .notification-item-copy, .role-identity-copy, .room-body, .row-main) {
+  overflow-wrap: anywhere;
+}
+
+/* Theme-aware surfaces for components that previously used literal white. */
+html:not(.dark-mode) .app-shell :where(.panel, .table-panel, .stat-card, .quick-card,
+  .room-card, .request-card, .monthly-calendar-card, .calendar-facility-section,
+  .reservation-status-card, .reservation-history-card, .sa-panel, .sa-metric) {
+  background-color: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell.dark-mode :where(.panel, .table-panel, .stat-card, .quick-card,
+  .room-card, .request-card, .monthly-calendar-card, .calendar-facility-section,
+  .reservation-status-card, .reservation-history-card, .sa-panel, .sa-metric,
+  .notification-panel) {
+  background-color: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.app-shell :where(input, select, textarea) {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.app-shell :where(button, .primary-btn, .outline-btn, .danger-btn) {
+  max-width: 100%;
+}
+
+.app-shell :where(.table-panel, .sa-table-wrap, .app-table-wrap, .table-wrap) {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Tablet: compact icon rail retains the full desktop workspace. */
+@media (min-width: 761px) and (max-width: 1050px) {
+  .app-shell .sidebar {
+    width: 78px;
+    padding: 16px 9px;
+    transform: translateX(0);
+    box-shadow: none;
+  }
+
+  .app-shell .main,
+  .app-shell.sidebar-collapsed .main {
+    margin-left: 78px;
+    width: calc(100% - 78px);
+  }
+
+  .app-shell .sidebar .brand-copy,
+  .app-shell .sidebar .side-label,
+  .app-shell .sidebar .side-user,
+  .app-shell .sidebar .admin-role-badge span,
+  .app-shell .sidebar .admin-side-summary,
+  .app-shell .sidebar .logout-btn span {
+    display: none !important;
+  }
+
+  .app-shell .sidebar .side-brand,
+  .app-shell .sidebar .brand {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .app-shell .sidebar .sidebar-collapse-btn {
+    display: none !important;
+  }
+
+  .app-shell .sidebar nav {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .app-shell .sidebar nav button {
+    justify-content: center;
+    min-height: 44px;
+    padding: 9px 5px;
+    gap: 0;
+  }
+
+  .app-shell .sidebar nav button > span:not(.nav-dot) {
+    display: none !important;
+  }
+
+  .app-shell .sidebar nav button > svg {
+    width: 19px;
+    height: 19px;
+    flex: none;
+  }
+
+  .app-shell .sidebar .side-profile {
+    justify-content: center;
+    padding: 8px 0;
+  }
+
+  .app-shell .sidebar .side-profile > svg {
+    display: none;
+  }
+
+  .app-shell .sidebar .logout-btn {
+    justify-content: center;
+    padding: 11px 5px;
+  }
+
+  .app-shell .mobile-bottom-nav {
+    display: none !important;
+  }
+
+  .app-shell .topbar {
+    min-height: 66px;
+    padding-left: 18px;
+    padding-right: 18px;
+    gap: 12px;
+  }
+
+  .app-shell .page {
+    padding: 22px 20px 42px;
+  }
+
+  .app-shell :where(.stats-grid, .admin-stat-grid, .admin-room-grid,
+    .sa-metric-grid, .room-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-shell :where(.two-col, .admin-dashboard-grid, .admin-lower-grid,
+    .sa-two-col, .sa-facility-layout) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell .global-search {
+    flex: 1 1 180px;
+    width: auto;
+    min-width: 120px;
+    max-width: 260px;
+  }
+}
+
+/* Phones and narrow tablet portrait. */
+@media (max-width: 760px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    width: 100%;
+    min-height: 100dvh;
+    overflow-x: clip;
+  }
+
+  .app-shell .main {
+    width: 100%;
+    min-height: 100dvh;
+    margin-left: 0;
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));
+    overflow-x: clip;
+  }
+
+  .app-shell .sidebar,
+  .app-shell .sidebar.admin-sidebar {
+    width: min(296px, calc(100vw - 48px));
+    max-width: calc(100vw - 48px);
+    padding: calc(14px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom));
+    transform: translateX(-110%);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    z-index: 65;
+    box-shadow: 20px 0 50px rgba(8, 18, 32, .24);
+  }
+
+  .app-shell .sidebar.open,
+  .app-shell.sidebar-collapsed .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .app-shell.sidebar-collapsed .sidebar {
+    width: min(296px, calc(100vw - 48px));
+    max-width: calc(100vw - 48px);
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .app-shell.sidebar-collapsed .main {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .app-shell .sidebar .brand-copy,
+  .app-shell .sidebar .side-label,
+  .app-shell .sidebar .side-user,
+  .app-shell .sidebar .admin-role-badge span,
+  .app-shell .sidebar .admin-side-summary,
+  .app-shell .sidebar .logout-btn span,
+  .app-shell.sidebar-collapsed .sidebar .brand-copy,
+  .app-shell.sidebar-collapsed .sidebar .side-label,
+  .app-shell.sidebar-collapsed .sidebar .side-user,
+  .app-shell.sidebar-collapsed .sidebar .admin-role-badge span,
+  .app-shell.sidebar-collapsed .sidebar .admin-side-summary,
+  .app-shell.sidebar-collapsed .sidebar .logout-btn span {
+    display: initial;
+  }
+
+  .app-shell .sidebar .side-label {
+    display: block;
+  }
+
+  .app-shell .sidebar .sidebar-collapse-btn {
+    display: none !important;
+  }
+
+  .app-shell .sidebar .mobile-close {
+    display: grid;
+    flex: 0 0 38px;
+    width: 38px;
+    height: 38px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel-soft);
+    color: var(--ink);
+  }
+
+  .app-shell .sidebar nav {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .app-shell .sidebar nav button {
+    min-height: 45px;
+    padding: 10px 12px;
+    justify-content: flex-start;
+    gap: 11px;
+    border-radius: 11px;
+  }
+
+  .app-shell .sidebar nav button > span:not(.nav-dot) {
+    display: inline;
+  }
+
+  .app-shell .sidebar .side-profile {
+    min-height: 54px;
+    justify-content: flex-start;
+    padding: 8px;
+  }
+
+  /* When the drawer is open, shade the page behind it. */
+  .app-shell:has(.sidebar.open) .main::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(10, 20, 34, .42);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    pointer-events: none;
+  }
+
+  .app-shell:has(.sidebar.open) .mobile-bottom-nav {
+    opacity: .38;
+    pointer-events: none;
+  }
+
+  .app-shell .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: calc(62px + env(safe-area-inset-top));
+    height: auto;
+    padding: calc(7px + env(safe-area-inset-top)) 12px 7px;
+  }
+
+  .app-shell .menu-btn {
+    display: grid;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    margin: 0;
+    border-radius: 10px;
+    background: var(--panel);
+    color: var(--ink);
+  }
+
+  .app-shell .topbar-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 34%;
+  }
+
+  .app-shell .topbar-title h1 {
+    font-size: clamp(13px, 3.7vw, 16px);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-shell .topbar-title p {
+    display: none;
+  }
+
+  .app-shell .global-search {
+    flex: 1 1 90px;
+    width: auto;
+    min-width: 76px;
+    max-width: 185px;
+    margin: 0;
+  }
+
+  .app-shell .global-search-field {
+    height: 36px;
+    min-width: 0;
+    padding: 0 8px;
+    gap: 6px;
+    border-radius: 10px;
+  }
+
+  .app-shell .global-search-field > svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .app-shell .global-search-field input {
+    min-width: 0;
+    width: 100%;
+    font-size: 14px;
+  }
+
+  .app-shell .global-search-field input::placeholder {
+    font-size: 10px;
+  }
+
+  .app-shell .top-actions {
+    flex: 0 0 auto;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .app-shell .top-actions .theme-toggle,
+  .app-shell .top-actions .notification-btn {
+    display: grid !important;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 10px;
+  }
+
+  .app-shell .top-actions .notification-anchor {
+    display: block;
+    flex: 0 0 36px;
+  }
+
+  .app-shell .top-actions > .icon-btn:not(.notification-btn),
+  .app-shell .top-actions > .top-user {
+    display: none !important;
+  }
+
+  .app-shell .notification-panel {
+    position: fixed;
+    top: calc(68px + env(safe-area-inset-top));
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 150px - env(safe-area-inset-bottom));
+    overflow: hidden;
+    z-index: 90;
+  }
+
+  .app-shell .notification-list {
+    max-height: calc(100dvh - 240px);
+    overflow-y: auto;
+  }
+
+  .app-shell .page {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 17px 14px 28px;
+  }
+
+  .app-shell .page :where(h1, h2, h3, h4) {
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell .welcome,
+  .app-shell .page-heading,
+  .app-shell .admin-welcome {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .app-shell .welcome h2,
+  .app-shell .page-heading h2,
+  .app-shell .admin-welcome h2 {
+    font-size: clamp(20px, 5vw, 24px);
+    line-height: 1.2;
+  }
+
+  .app-shell .page-heading > *,
+  .app-shell .welcome > *,
+  .app-shell .admin-welcome > * {
+    max-width: 100%;
+  }
+
+  .app-shell :where(.two-col, .admin-dashboard-grid, .admin-lower-grid,
+    .sa-two-col, .sa-facility-layout, .calendar-summary, .timeline-card,
+    .settings-grid, .detail-grid) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell :where(.stats-grid, .admin-stat-grid, .sa-metric-grid,
+    .room-usage-summary, .admin-summary-strip, .mini-grid) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-shell .room-grid,
+  .app-shell .admin-room-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell :where(.panel, .admin-panel, .sa-panel) {
+    padding: 14px;
+    border-radius: 13px;
+  }
+
+  .app-shell :where(.panel-head, .admin-panel-head, .monthly-calendar-header,
+    .calendar-facility-header, .room-usage-heading) {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .app-shell .panel-head > *,
+  .app-shell .admin-panel-head > * {
+    min-width: 0;
+  }
+
+  .app-shell :where(.filters, .toolbar, .form-actions, .admin-header-actions,
+    .sa-form-actions, .request-actions, .modal-actions) {
+    flex-wrap: wrap;
+  }
+
+  .app-shell :where(.filters > *, .admin-header-actions > *, .form-actions > *) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-shell .form-grid,
+  .app-shell .sa-form-grid,
+  .app-shell .reservation-form-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell .span-2,
+  .app-shell .sa-form-wide {
+    grid-column: auto;
+  }
+
+  .app-shell :where(input:not([type=checkbox]):not([type=radio]), select, textarea) {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .app-shell :where(.primary-btn, .outline-btn, .danger-btn, .text-btn,
+    .icon-btn, .date-nav button, .calendar-month-button, .today-btn) {
+    min-height: 40px;
+  }
+
+  .app-shell .mobile-bottom-nav {
+    position: fixed;
+    z-index: 50;
+    left: 8px;
+    right: 8px;
+    bottom: calc(7px + env(safe-area-inset-bottom));
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 3px;
+    height: 64px;
+    padding: 5px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    background: var(--panel);
+    box-shadow: 0 10px 30px rgba(16, 24, 40, .14);
+  }
+
+  .app-shell .mobile-bottom-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-shell .mobile-bottom-nav button {
+    flex: 0 0 56px;
+    width: 56px;
+    min-width: 56px;
+    max-width: 56px;
+    height: 52px;
+    min-height: 52px;
+    padding: 4px 2px;
+    gap: 2px;
+    border-radius: 12px;
+    font-size: 9px;
+    line-height: 1.05;
+    white-space: normal;
+  }
+
+  .app-shell .mobile-bottom-nav button > span:last-child {
+    display: -webkit-box;
+    max-width: 54px;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell .mobile-nav-icon {
+    flex: 0 0 23px;
+    width: 23px;
+    height: 23px;
+  }
+
+  .app-shell .mobile-nav-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .app-shell .mobile-nav-icon i {
+    border-color: var(--panel);
+  }
+
+  /* Tables scroll inside their own panel instead of widening the page. */
+  .app-shell .table-panel,
+  .app-shell .sa-table-wrap,
+  .app-shell .app-table-wrap,
+  .app-shell .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-radius: 11px;
+  }
+
+  .app-shell table {
+    min-width: 620px;
+  }
+
+  .app-shell .sa-table {
+    min-width: 520px;
+  }
+
+  /* Calendar remains a seven-day grid without forcing page-level scroll. */
+  .app-shell .monthly-calendar-card {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    border-radius: 13px;
+  }
+
+  .app-shell .monthly-calendar-weekdays,
+  .app-shell .monthly-calendar-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .app-shell .monthly-calendar-weekdays > div {
+    min-width: 0;
+    padding: 7px 1px;
+    font-size: 8px;
+    letter-spacing: 0;
+  }
+
+  .app-shell .monthly-calendar-day {
+    min-width: 0;
+    min-height: 58px;
+    padding: 4px 3px;
+  }
+
+  .app-shell .monthly-calendar-day-number {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+  }
+
+  .app-shell .monthly-calendar-day :where(span, small, strong) {
+    overflow-wrap: anywhere;
+  }
+
+  .app-shell .calendar-month-button,
+  .app-shell .monthly-calendar-actions .today-btn {
+    min-width: 34px;
+    min-height: 34px;
+  }
+
+  /* Dialogs become contained bottom sheets with their own scroll. */
+  .app-shell .modal-backdrop {
+    padding: 8px;
+    align-items: flex-end;
+    overflow-y: auto;
+  }
+
+  .app-shell .modal,
+  .app-shell .modal.wide,
+  .app-shell .reservation-smart-modal,
+  .app-shell .sa-history-modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+    margin: auto auto 0;
+    padding: 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 17px 17px 12px 12px;
+  }
+
+  .app-shell .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: stretch;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .app-shell .modal-actions > button {
+    flex: 1 1 125px;
+    min-height: 44px;
+  }
+
+  .app-shell .reservation-smart-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell .schedule-timeline-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .app-shell .schedule-timeline-labels,
+  .app-shell .schedule-timeline {
+    min-width: 420px;
+  }
+
+  .app-shell .sa-facility-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell .sa-facility-list {
+    max-height: 240px;
+  }
+
+  .app-shell .sa-audit-row {
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+
+  .app-shell .sa-audit-row time {
+    grid-column: 2;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .app-shell .profile-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .app-shell .role-identity {
+    width: 100%;
+  }
+
+  .app-shell .orgchat-panel {
+    left: 8px;
+    right: 8px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    width: auto;
+    height: min(68dvh, 620px);
+    min-height: 300px;
+    border-radius: 16px;
+  }
+
+  .app-shell .orgchat-fab {
+    right: 15px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .app-shell .auth-page {
+    min-height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell .auth-art {
+    display: none;
+  }
+
+  .app-shell .auth-card {
+    width: 100%;
+    min-height: 100dvh;
+    padding: calc(26px + env(safe-area-inset-top)) 18px calc(26px + env(safe-area-inset-bottom));
+  }
+
+  .app-shell :where(.room-photo, .room-image, .facility-image) {
+    max-width: 100%;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 390px) {
+  .app-shell .topbar {
+    gap: 6px;
+    padding-left: 9px;
+    padding-right: 9px;
+  }
+
+  .app-shell .topbar-title {
+    max-width: 29%;
+  }
+
+  .app-shell .global-search {
+    min-width: 68px;
+  }
+
+  .app-shell .global-search-field {
+    padding-left: 6px;
+    padding-right: 6px;
+    gap: 4px;
+  }
+
+  .app-shell .top-actions {
+    gap: 4px;
+  }
+
+  .app-shell .top-actions .theme-toggle,
+  .app-shell .top-actions .notification-btn,
+  .app-shell .top-actions .notification-anchor {
+    flex-basis: 34px;
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .app-shell .page {
+    padding-left: 11px;
+    padding-right: 11px;
+  }
+
+  .app-shell :where(.stats-grid, .admin-stat-grid, .sa-metric-grid,
+    .room-usage-summary, .admin-summary-strip) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .app-shell :where(.stat-card, .admin-stat-card, .sa-metric) {
+    padding: 11px;
+  }
+
+  .app-shell .admin-stat-card strong,
+  .app-shell .sa-metric > strong {
+    font-size: 20px;
+  }
+
+  .app-shell .mobile-bottom-nav {
+    left: 6px;
+    right: 6px;
+    gap: 2px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .app-shell .mobile-bottom-nav button {
+    flex-basis: 53px;
+    width: 53px;
+    min-width: 53px;
+    max-width: 53px;
+    font-size: 8.5px;
+  }
+
+  .app-shell .monthly-calendar-day {
+    min-height: 52px;
+    padding: 3px 2px;
+  }
+
+  .app-shell .monthly-calendar-day-number {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+  }
+}
+
+/* Respect reduced motion in all responsive states. */
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .app-shell *::before,
+  .app-shell *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+
+
+/* Fine alignment adjustments for compact handset headers and nav labels. */
+@media (max-width: 760px) {
+  .app-shell .topbar-title {
+    flex: 0 0 clamp(76px, 24vw, 96px);
+    width: clamp(76px, 24vw, 96px);
+    max-width: clamp(76px, 24vw, 96px);
+    min-width: 0;
+  }
+
+  .app-shell .global-search {
+    flex: 1 1 90px;
+    width: auto;
+    min-width: 76px;
+    max-width: none;
+  }
+
+  .app-shell .mobile-bottom-nav button {
+    flex: 1 0 56px;
+    width: auto;
+    min-width: 56px;
+    max-width: 72px;
+  }
+
+  .app-shell .mobile-bottom-nav button > span:last-child {
+    overflow-wrap: normal;
+    word-break: normal;
+    hyphens: none;
+    font-size: 8.5px;
+  }
+
+  .app-shell .reference-recent-panel .empty {
+    min-height: 0;
+    padding: 22px 10px;
+  }
+
+  .app-shell .reference-dashboard-grid > * {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 390px) {
+  .app-shell .topbar-title {
+    flex-basis: 78px;
+    width: 78px;
+    max-width: 78px;
+  }
+
+  .app-shell .global-search {
+    min-width: 72px;
+  }
+
+  .app-shell .mobile-bottom-nav button {
+    flex-basis: 54px;
+    min-width: 54px;
+    max-width: 68px;
+  }
+}
+
+
+
+/* Keep the current page title visible while using the compact mobile search toggle. */
+@media (max-width: 560px) {
+  .app-shell .topbar-title {
+    display: block !important;
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .app-shell .topbar-title h1 {
+    display: block;
+    font-size: clamp(14px, 4vw, 17px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-shell .global-search {
+    display: block;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    margin: 0;
+  }
+
+  .app-shell .global-search-desktop {
+    display: none;
+  }
+
+  .app-shell .global-search-mobile-toggle {
+    display: grid;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    color: var(--ink);
+  }
+
+  .app-shell .global-search-mobile-panel {
+    position: fixed;
+    top: calc(68px + env(safe-area-inset-top));
+    left: 10px;
+    right: 10px;
+    z-index: 100;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    box-shadow: var(--shadow-lg);
+  }
+}
